@@ -11,12 +11,10 @@ fi
 
 git add -A
 
-if git diff --cached --quiet; then
-  exit 0
+if ! git diff --cached --quiet; then
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  git commit -m "Auto backup: $timestamp"
 fi
-
-timestamp="$(date '+%Y-%m-%d %H:%M:%S %Z')"
-git commit -m "Auto backup: $timestamp"
 
 if git remote get-url origin >/dev/null 2>&1; then
   git push origin HEAD:main

@@ -1,0 +1,38 @@
+.DS_Store
+*.asv
+*~
+
+# Python/Jupyter runtime files
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# MATLAB runtime/output files
+*.fig
+*.mat
+*.mex*
+
+# Raw acquisition data and large binary exports
+*.rhs
+*.rhd
+*.dat
+*.bin
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# Generated analysis outputs
+intan_A014_batch_analysis/
+intan_A014_highres_stim_analysis/
+20260617 stimulation Pt/
+analysis_outputs/
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.pdf
+
+# Local backup logs
+.git-backup.log

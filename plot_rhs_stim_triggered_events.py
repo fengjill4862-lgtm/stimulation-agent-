@@ -1,0 +1,427 @@
+"""Stim-triggered bandpass plots for RHS sessions."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+_cache_root = Path(tempfile.gettempdir()) / "codex_matplotlib_cache"
+_mpl_cache = _cache_root / "mpl"
+_xdg_cache = _cache_root / "xdg"
+_mpl_cache.mkdir(parents=True, exist_ok=True)
+_xdg_cache.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(_mpl_cache))
+os.environ.setdefault("XDG_CACHE_HOME", str(_xdg_cache))
+
+import matplotlib.pyplot as plt
+
+from plot_rhs_filtered_wideband import (
+    amplitude_mask,
+    bandpass_filter_wideband,
+    format_bandpass_filename_label,
+    format_bandpass_plot_label,
+    masked_envelope_for_display,
+)
+from plot_rhs_raw_wideband_with_stim_legend import (
+    channel_selection_label,
+    sample_slice_for_time_window,
+)
+
+
+@dataclass(frozen=True)
+class StimTriggeredEvent:
+    event_number: int
+    start_sample: int
+    end_sample: int
+    onset_s: float
+    end_s: float
+
+    @property
+    def duration_s(self) -> float:
+        return self.end_s - self.onset_s
+
+
+def find_stim_trigger_onsets(
+    stim_uA: np.ndarray,
+    sample_rate_hz: float,
+    merge_gap_ms: float = 10.0,
+) -> np.ndarray:
+    """Find stim_data onsets, merging nearby pulses within one train."""
+    nonzero = np.flatnonzero(stim_uA != 0)
+    if nonzero.size == 0:
+        return np.asarray([], dtype=np.int64)
+
+    split_after = np.flatnonzero(np.diff(nonzero) > 1)
+    starts = np.r_[nonzero[0], nonzero[split_after + 1]].astype(np.int64)
+    ends = np.r_[nonzero[split_after] + 1, nonzero[-1] + 1].astype(np.int64)
+    merge_gap_samples = max(0, int(round(merge_gap_ms * 1.0e-3 * sample_rate_hz)))
+
+    merged_starts: list[int] = []
+    current_start = int(starts[0])
+    current_end = int(ends[0])
+    for start, end in zip(starts[1:], ends[1:]):
+        start_i = int(start)
+        end_i = int(end)
+        if start_i - current_end <= merge_gap_samples:
+            current_end = end_i
+        else:
+            merged_starts.append(current_start)
+            current_start = start_i
+            current_end = end_i
+    merged_starts.append(current_start)
+    return np.asarray(merged_starts, dtype=np.int64)
+
+
+def build_stim_triggered_events(
+    stim_uA: np.ndarray,
+    sample_rate_hz: float,
+    time_window: tuple[float, float] | None,
+    merge_gap_ms: float = 10.0,
+) -> list[StimTriggeredEvent]:
+    """Build windows from each grouped stim onset to the next grouped onset."""
+    trigger_onsets = find_stim_trigger_onsets(
+        stim_uA=stim_uA,
+        sample_rate_hz=sample_rate_hz,
+        merge_gap_ms=merge_gap_ms,
+    )
+    if trigger_onsets.size == 0:
+        return []
+
+    display_slice, _display_bounds = sample_slice_for_time_window(
+        stim_uA.size, sample_rate_hz, time_window
+    )
+    display_start = int(display_slice.start or 0)
+    display_stop = int(display_slice.stop or stim_uA.size)
+
+    events: list[StimTriggeredEvent] = []
+    for trigger_index, start_sample in enumerate(trigger_onsets):
+        start_i = int(start_sample)
+        if start_i < display_start or start_i >= display_stop:
+            continue
+
+        if trigger_index + 1 < trigger_onsets.size:
+            next_start = int(trigger_onsets[trigger_index + 1])
+        else:
+            next_start = stim_uA.size
+        end_i = min(next_start, display_stop)
+        if end_i <= start_i:
+            continue
+
+        events.append(
+            StimTriggeredEvent(
+                event_number=len(events) + 1,
+                start_sample=start_i,
+                end_sample=end_i,
+                onset_s=start_i / sample_rate_hz,
+                end_s=end_i / sample_rate_hz,
+            )
+        )
+    return events
+
+
+def filter_channel_data(
+    channel_data: Sequence[tuple[str, np.ndarray]],
+    sample_rate_hz: float,
+    band_hz: tuple[float, float] | None,
+) -> list[tuple[str, np.ndarray]]:
+    """Apply the selected frequency setting once for event plotting."""
+    return [
+        (channel_name, bandpass_filter_wideband(raw_uV, sample_rate_hz, band_hz))
+        for channel_name, raw_uV in channel_data
+    ]
+
+
+def default_stim_event_output_path(
+    folder: Path,
+    channel_label: str,
+    band_hz: tuple[float, float] | None,
+    amplitude_uV: tuple[float, float] | None,
+    time_label: str,
+    event: StimTriggeredEvent,
+) -> Path:
+    safe_channel = _safe_label(channel_label)
+    band_label = format_bandpass_filename_label(band_hz).replace(".", "p")
+    amp_label = "allAmp" if amplitude_uV is None else (
+        f"{_format_signed_number(amplitude_uV[0])}-to-"
+        f"{_format_signed_number(amplitude_uV[1])}uV"
+    )
+    onset_label = _format_number(event.onset_s)
+    return (
+        folder
+        / f"stim_event_{event.event_number:03d}_{safe_channel}_{band_label}_"
+        f"{amp_label}_{time_label}_onset{onset_label}s.png"
+    )
+
+
+def default_stim_events_grid_output_path(
+    folder: Path,
+    channel_label: str,
+    band_hz: tuple[float, float] | None,
+    amplitude_uV: tuple[float, float] | None,
+    time_label: str,
+    event_count: int,
+) -> Path:
+    """Name the single combined PNG containing all stim-triggered events."""
+    safe_channel = _safe_label(channel_label)
+    band_label = format_bandpass_filename_label(band_hz).replace(".", "p")
+    amp_label = "allAmp" if amplitude_uV is None else (
+        f"{_format_signed_number(amplitude_uV[0])}-to-"
+        f"{_format_signed_number(amplitude_uV[1])}uV"
+    )
+    return (
+        folder
+        / f"stim_events_all_{safe_channel}_{band_label}_{amp_label}_"
+        f"{time_label}_{event_count:03d}events.png"
+    )
+
+
+def plot_stim_triggered_event(
+    filtered_channel_data: Sequence[tuple[str, np.ndarray]],
+    sample_rate_hz: float,
+    folder: Path,
+    event: StimTriggeredEvent,
+    band_hz: tuple[float, float] | None,
+    amplitude_uV: tuple[float, float] | None,
+    max_points: int,
+) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
+    """Plot one event window from stim onset to immediately before next onset."""
+    if not filtered_channel_data:
+        raise ValueError("No channel data was provided.")
+
+    channel_names = [item[0] for item in filtered_channel_data]
+    n_channels = len(filtered_channel_data)
+    fig_height = max(5.0, 2.25 * n_channels + 2.0)
+    fig, axes = plt.subplots(
+        n_channels,
+        1,
+        figsize=(15, fig_height),
+        sharex=True,
+        squeeze=False,
+    )
+    axes_flat = axes.ravel()
+    fig.subplots_adjust(left=0.13, right=0.98, bottom=0.10, top=0.82, hspace=0.24)
+
+    amp_title = "all amplitudes" if amplitude_uV is None else (
+        f"amplitude {amplitude_uV[0]:g} to {amplitude_uV[1]:g} uV"
+    )
+    fig.suptitle(
+        f"{folder.name}\nStim event {event.event_number:03d}: "
+        f"onset {event.onset_s:g} s, duration {event.duration_s:g} s\n"
+        f"{channel_selection_label(channel_names)} "
+        f"{format_bandpass_plot_label(band_hz)}, {amp_title}",
+        fontsize=11,
+        y=0.97,
+    )
+    fig.supylabel("filtered amplitude", x=0.035)
+
+    event_slice = slice(event.start_sample, event.end_sample)
+    summaries: list[dict[str, float | int | str]] = []
+    used_envelope_any = False
+    for ax, (channel_name, filtered_uV) in zip(axes_flat, filtered_channel_data):
+        event_uV = filtered_uV[event_slice]
+        in_range = amplitude_mask(event_uV, amplitude_uV)
+        x_event, y_event, used_envelope = masked_envelope_for_display(
+            event_uV,
+            in_range,
+            sample_rate_hz,
+            max_points,
+            start_time_s=0.0,
+        )
+        used_envelope_any = used_envelope_any or used_envelope
+
+        if x_event.size:
+            ax.plot(x_event, y_event, color="#d62728", linewidth=0.8)
+
+        if amplitude_uV is not None:
+            low_uV, high_uV = amplitude_uV
+            ax.axhline(low_uV, color="#d62728", linewidth=0.7, alpha=0.35)
+            ax.axhline(high_uV, color="#d62728", linewidth=0.7, alpha=0.35)
+            ax.set_ylim(low_uV, high_uV)
+
+        ax.text(
+            -0.045,
+            0.5,
+            channel_name,
+            transform=ax.transAxes,
+            ha="right",
+            va="center",
+            fontsize=10,
+            fontweight="bold",
+        )
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.set_xlim(0.0, event.duration_s)
+        summaries.append(
+            {
+                "channel_name": channel_name,
+                "samples_total": int(event_uV.size),
+                "samples_in_amplitude_range": int(np.count_nonzero(in_range)),
+                "percent_in_amplitude_range": float(np.mean(in_range) * 100.0),
+                "filtered_rms_uV": float(np.sqrt(np.mean(event_uV**2))),
+            }
+        )
+
+    axes_flat[-1].set_xlabel("Time from stim onset (s)")
+    if used_envelope_any:
+        axes_flat[-1].text(
+            0.995,
+            0.01,
+            "displayed as min/max envelope",
+            transform=axes_flat[-1].transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            color="0.35",
+        )
+    return fig, summaries
+
+
+def plot_stim_triggered_events_grid(
+    filtered_channel_data: Sequence[tuple[str, np.ndarray]],
+    sample_rate_hz: float,
+    folder: Path,
+    events: Sequence[StimTriggeredEvent],
+    band_hz: tuple[float, float] | None,
+    amplitude_uV: tuple[float, float] | None,
+    max_points: int,
+    events_per_row: int = 3,
+) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
+    """Plot all stim-triggered events in one grid, with three events per row."""
+    if not filtered_channel_data:
+        raise ValueError("No channel data was provided.")
+    if not events:
+        raise ValueError("No stim-triggered events were provided.")
+
+    events_per_row = max(1, int(events_per_row))
+    channel_names = [item[0] for item in filtered_channel_data]
+    n_channels = len(filtered_channel_data)
+    n_event_rows = int(np.ceil(len(events) / events_per_row))
+    n_plot_rows = n_event_rows * n_channels
+
+    fig_width = max(12.0, 5.2 * events_per_row)
+    fig_height = max(4.0, 1.35 * n_plot_rows + 1.8)
+    fig, axes = plt.subplots(
+        n_plot_rows,
+        events_per_row,
+        figsize=(fig_width, fig_height),
+        squeeze=False,
+    )
+    fig.subplots_adjust(
+        left=0.08,
+        right=0.985,
+        bottom=0.07,
+        top=0.88,
+        hspace=0.55,
+        wspace=0.25,
+    )
+
+    amp_title = "all amplitudes" if amplitude_uV is None else (
+        f"amplitude {amplitude_uV[0]:g} to {amplitude_uV[1]:g} uV"
+    )
+    fig.suptitle(
+        f"{folder.name}\n{len(events)} stim-triggered event(s), "
+        f"3 per row; {channel_selection_label(channel_names)} "
+        f"{format_bandpass_plot_label(band_hz)}, {amp_title}",
+        fontsize=11,
+        y=0.975,
+    )
+    fig.supylabel("filtered amplitude", x=0.02)
+
+    summaries: list[dict[str, float | int | str]] = []
+    used_envelope_any = False
+    for event_index, event in enumerate(events):
+        event_row = event_index // events_per_row
+        event_col = event_index % events_per_row
+        event_slice = slice(event.start_sample, event.end_sample)
+
+        for channel_index, (channel_name, filtered_uV) in enumerate(filtered_channel_data):
+            axis_row = event_row * n_channels + channel_index
+            ax = axes[axis_row, event_col]
+            event_uV = filtered_uV[event_slice]
+            in_range = amplitude_mask(event_uV, amplitude_uV)
+            x_event, y_event, used_envelope = masked_envelope_for_display(
+                event_uV,
+                in_range,
+                sample_rate_hz,
+                max_points,
+                start_time_s=0.0,
+            )
+            used_envelope_any = used_envelope_any or used_envelope
+
+            if x_event.size:
+                ax.plot(x_event, y_event, color="#d62728", linewidth=0.55)
+
+            if amplitude_uV is not None:
+                low_uV, high_uV = amplitude_uV
+                ax.axhline(low_uV, color="#d62728", linewidth=0.5, alpha=0.3)
+                ax.axhline(high_uV, color="#d62728", linewidth=0.5, alpha=0.3)
+                ax.set_ylim(low_uV, high_uV)
+
+            if channel_index == 0:
+                ax.set_title(
+                    f"onset {event.onset_s:g}s, dur {event.duration_s:g}s",
+                    fontsize=8,
+                )
+            ax.text(
+                0.01,
+                0.92,
+                channel_name,
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=7,
+                fontweight="bold",
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 1},
+            )
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.tick_params(labelsize=7)
+            ax.set_xlim(0.0, event.duration_s)
+            summaries.append(
+                {
+                    "event_number": event.event_number,
+                    "channel_name": channel_name,
+                    "samples_total": int(event_uV.size),
+                    "samples_in_amplitude_range": int(np.count_nonzero(in_range)),
+                    "percent_in_amplitude_range": float(np.mean(in_range) * 100.0),
+                    "filtered_rms_uV": float(np.sqrt(np.mean(event_uV**2))),
+                }
+            )
+
+    for event_index in range(len(events), n_event_rows * events_per_row):
+        event_row = event_index // events_per_row
+        event_col = event_index % events_per_row
+        for channel_index in range(n_channels):
+            axes[event_row * n_channels + channel_index, event_col].set_visible(False)
+
+    if used_envelope_any:
+        fig.text(
+            0.985,
+            0.015,
+            "displayed as min/max envelope",
+            ha="right",
+            va="bottom",
+            fontsize=7,
+            color="0.35",
+        )
+    return fig, summaries
+
+
+def _safe_label(text: str) -> str:
+    safe = text.strip().replace(" ", "_").replace("/", "_").replace(":", "_")
+    return safe.replace(",", "_").replace("-", "").replace("__", "_") or "channels"
+
+
+def _format_number(value: float) -> str:
+    return f"{value:g}".replace("-", "neg").replace(".", "p")
+
+
+def _format_signed_number(value: float) -> str:
+    if value < 0:
+        return f"neg{_format_number(abs(value))}"
+    return _format_number(value)

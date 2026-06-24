@@ -188,6 +188,7 @@ def plot_stim_triggered_event(
     band_hz: tuple[float, float] | None,
     amplitude_uV: tuple[float, float] | None,
     max_points: int,
+    stim_channel_name: str | None = None,
 ) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
     """Plot one event window from stim onset to immediately before next onset."""
     if not filtered_channel_data:
@@ -243,10 +244,11 @@ def plot_stim_triggered_event(
             ax.axhline(high_uV, color="#d62728", linewidth=0.7, alpha=0.35)
             ax.set_ylim(low_uV, high_uV)
 
+        channel_label = f"{channel_name} *" if channel_name == stim_channel_name else channel_name
         ax.text(
             -0.045,
             0.5,
-            channel_name,
+            channel_label,
             transform=ax.transAxes,
             ha="right",
             va="center",
@@ -290,6 +292,7 @@ def plot_stim_triggered_events_grid(
     amplitude_uV: tuple[float, float] | None,
     max_points: int,
     events_per_row: int = 3,
+    stim_channel_name: str | None = None,
 ) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
     """Plot all stim-triggered events in one grid, with three events per row."""
     if not filtered_channel_data:
@@ -367,10 +370,11 @@ def plot_stim_triggered_events_grid(
                     f"onset {event.onset_s:g}s, dur {event.duration_s:g}s",
                     fontsize=8,
                 )
+            channel_label = f"{channel_name} *" if channel_name == stim_channel_name else channel_name
             ax.text(
                 0.01,
                 0.92,
-                channel_name,
+                channel_label,
                 transform=ax.transAxes,
                 ha="left",
                 va="top",

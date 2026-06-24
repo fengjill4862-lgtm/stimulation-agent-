@@ -216,6 +216,7 @@ def plot_filtered_wideband(
     amplitude_uV: tuple[float, float] | None,
     max_points: int,
     time_window: tuple[float, float] | None = None,
+    stim_channel_name: str | None = None,
 ) -> tuple[plt.Figure, dict[str, float | int | str]]:
     """Plot one bandpass-filtered channel inside a signed amplitude window."""
     fig, summaries = plot_filtered_channels(
@@ -226,6 +227,7 @@ def plot_filtered_wideband(
         amplitude_uV=amplitude_uV,
         max_points=max_points,
         time_window=time_window,
+        stim_channel_name=stim_channel_name,
     )
     return fig, summaries[0]
 
@@ -238,6 +240,7 @@ def plot_filtered_channels(
     amplitude_uV: tuple[float, float] | None,
     max_points: int,
     time_window: tuple[float, float] | None = None,
+    stim_channel_name: str | None = None,
 ) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
     """Plot one or more bandpass-filtered channels as stacked traces."""
     if not channel_data:
@@ -295,10 +298,11 @@ def plot_filtered_channels(
             ax.axhline(high_uV, color="#d62728", linewidth=0.7, alpha=0.35)
             ax.set_ylim(low_uV, high_uV)
 
+        channel_label = f"{channel_name} *" if channel_name == stim_channel_name else channel_name
         ax.text(
             -0.045,
             0.5,
-            channel_name,
+            channel_label,
             transform=ax.transAxes,
             ha="right",
             va="center",

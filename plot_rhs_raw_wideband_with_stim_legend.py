@@ -442,6 +442,19 @@ def find_pulse_segments(stim_uA: np.ndarray) -> list[tuple[int, int]]:
     return [(int(start), int(end)) for start, end in zip(starts, ends)]
 
 
+def find_stim_channel_in_data(
+    channel_data: Sequence[tuple[str, np.ndarray, np.ndarray]],
+    display_slice: slice,
+) -> tuple[str, np.ndarray, list[tuple[int, int]]] | None:
+    """Return the first selected channel whose displayed stim_data is nonzero."""
+    for channel_name, _raw_uV, stim_uA in channel_data:
+        display_stim_uA = stim_uA[display_slice]
+        pulse_segments = find_pulse_segments(display_stim_uA)
+        if pulse_segments:
+            return channel_name, display_stim_uA, pulse_segments
+    return None
+
+
 @dataclass(frozen=True)
 class StimPulseMetrics:
     amplitude_uA: float
@@ -718,6 +731,9 @@ def plot_raw_channels_with_stim_pulse(
     )
     fig.supylabel("raw wideband (uV)", x=0.035)
 
+    stim_channel_info = find_stim_channel_in_data(channel_data, display_slice)
+    stim_channel_name = stim_channel_info[0] if stim_channel_info is not None else None
+
     used_envelope_any = False
     for ax, (channel_name, raw_uV, _stim_uA) in zip(axes_flat, channel_data):
         display_raw_uV = raw_uV[display_slice]
@@ -729,10 +745,11 @@ def plot_raw_channels_with_stim_pulse(
         )
         used_envelope_any = used_envelope_any or used_envelope
         ax.plot(x_s, y_uV, color="#1f6ed4", linewidth=0.75)
+        channel_label = f"{channel_name} *" if channel_name == stim_channel_name else channel_name
         ax.text(
             -0.045,
             0.5,
-            channel_name,
+            channel_label,
             transform=ax.transAxes,
             ha="right",
             va="center",
@@ -745,10 +762,8 @@ def plot_raw_channels_with_stim_pulse(
 
     axes_flat[-1].set_xlabel("Time (s)")
 
-    first_channel_name, _first_raw_uV, first_stim_uA = channel_data[0]
-    display_stim_uA = first_stim_uA[display_slice]
-    pulse_segments = find_pulse_segments(display_stim_uA)
-    if pulse_segments:
+    if stim_channel_info is not None:
+        _stim_channel_name, display_stim_uA, pulse_segments = stim_channel_info
         pulse_index = min(max(1, pulse_number), len(pulse_segments)) - 1
         pulse_start, pulse_end = pulse_segments[pulse_index]
         metrics = extract_biphasic_pulse_metrics(

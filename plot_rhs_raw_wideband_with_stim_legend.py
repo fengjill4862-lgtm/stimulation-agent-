@@ -731,7 +731,9 @@ def plot_raw_channels_with_stim_pulse(
     )
     fig.supylabel("raw wideband (uV)", x=0.035)
 
-    stim_channel_info = find_stim_channel_in_data(channel_data, display_slice)
+    stim_channel_info = find_stim_channel_in_data(
+        channel_data, slice(0, channel_data[0][1].size)
+    )
     stim_channel_name = stim_channel_info[0] if stim_channel_info is not None else None
 
     used_envelope_any = False
@@ -762,8 +764,22 @@ def plot_raw_channels_with_stim_pulse(
 
     axes_flat[-1].set_xlabel("Time (s)")
 
-    if stim_channel_info is not None:
-        _stim_channel_name, display_stim_uA, pulse_segments = stim_channel_info
+    display_stim_channel_info = None
+    if stim_channel_name is not None:
+        for channel_name, _raw_uV, stim_uA in channel_data:
+            if channel_name == stim_channel_name:
+                display_stim_uA = stim_uA[display_slice]
+                pulse_segments = find_pulse_segments(display_stim_uA)
+                if pulse_segments:
+                    display_stim_channel_info = (
+                        channel_name,
+                        display_stim_uA,
+                        pulse_segments,
+                    )
+                break
+
+    if display_stim_channel_info is not None:
+        _stim_channel_name, display_stim_uA, pulse_segments = display_stim_channel_info
         pulse_index = min(max(1, pulse_number), len(pulse_segments)) - 1
         pulse_start, pulse_end = pulse_segments[pulse_index]
         metrics = extract_biphasic_pulse_metrics(

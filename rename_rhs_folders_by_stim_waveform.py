@@ -207,6 +207,7 @@ def summarize_stim_waveform(
     )
 
     suffix = format_waveform_suffix(
+        stim_channel_name=channel_name,
         polarity=polarity,
         first_phase_duration_us=first_phase_duration_us,
         first_phase_amplitude_uA=first_phase_amplitude_uA,
@@ -310,13 +311,17 @@ def format_waveform_suffix(
     pulses_per_train: int,
     refractory_period_ms: float | None = None,
     compliance_hit: bool = False,
+    stim_channel_name: str | None = None,
 ) -> str:
-    """Format text like 'cathodic first 100us 200uA 1Hz 30 pulses 999ms RP comp'."""
-    pieces = [
+    """Format text like 'A-026 stim cathodic first 100us 200uA 1Hz 30 pulses'."""
+    pieces: list[str] = []
+    if stim_channel_name:
+        pieces.extend([stim_channel_name, "stim"])
+    pieces.extend([
         polarity,
         _format_value(first_phase_duration_us, "us"),
         _format_value(first_phase_amplitude_uA, "uA"),
-    ]
+    ])
     if pulse_train_frequency_hz is not None and math.isfinite(pulse_train_frequency_hz):
         pieces.append(_format_value(pulse_train_frequency_hz, "Hz"))
     pieces.append(f"{pulses_per_train:g} {_plural('pulse', pulses_per_train)}")
@@ -434,7 +439,7 @@ def _clean_folder_text(text: str) -> str:
 
 def _strip_generated_waveform_suffix(folder_name: str) -> str:
     generated_suffix = re.compile(
-        r"\s+(?:cathodic|anodic) first "
+        r"\s+(?:\S+ stim )?(?:cathodic|anodic) first "
         r"\d+(?:\.\d+)?us "
         r"\d+(?:\.\d+)?uA"
         r"(?: \d+(?:\.\d+)?Hz)? "

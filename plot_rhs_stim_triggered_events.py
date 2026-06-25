@@ -46,6 +46,14 @@ class StimTriggeredEvent:
         return self.end_s - self.onset_s
 
 
+@dataclass(frozen=True)
+class EventDisplayWindow:
+    sample_slice: slice
+    data_start_s: float
+    axis_bounds_s: tuple[float, float]
+    response_blank_s: tuple[float, float] | None
+
+
 def find_stim_trigger_onsets(
     stim_uA: np.ndarray,
     sample_rate_hz: float,
@@ -191,6 +199,8 @@ def plot_stim_triggered_event(
     stim_channel_name: str | None = None,
     stim_uA: np.ndarray | None = None,
     event_time_window: tuple[float, float] | None = None,
+    pre_time_s: float = 0.0,
+    post_time_window_s: tuple[float, float | None] | None = None,
 ) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
     """Plot one event window from stim onset to immediately before next onset."""
     if not filtered_channel_data:
@@ -224,20 +234,27 @@ def plot_stim_triggered_event(
     )
     fig.supylabel("filtered amplitude", x=0.035)
 
-    event_slice, display_bounds = _event_display_slice(
-        event, sample_rate_hz, event_time_window
+    window = _event_display_window(
+        event,
+        sample_rate_hz,
+        event_time_window=event_time_window,
+        pre_time_s=pre_time_s,
+        post_time_window_s=post_time_window_s,
     )
     summaries: list[dict[str, float | int | str]] = []
     used_envelope_any = False
     for ax, (channel_name, filtered_uV) in zip(axes_flat, filtered_channel_data):
-        event_uV = filtered_uV[event_slice]
+        event_uV = filtered_uV[window.sample_slice]
         in_range = amplitude_mask(event_uV, amplitude_uV)
+        in_range = _apply_response_blank_mask(
+            in_range, event_uV.size, sample_rate_hz, window
+        )
         x_event, y_event, used_envelope = masked_envelope_for_display(
             event_uV,
             in_range,
             sample_rate_hz,
             max_points,
-            start_time_s=display_bounds[0],
+            start_time_s=window.data_start_s,
         )
         used_envelope_any = used_envelope_any or used_envelope
 
@@ -263,7 +280,8 @@ def plot_stim_triggered_event(
         )
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        ax.set_xlim(display_bounds)
+        ax.axvline(0.0, color="0.78", linewidth=0.75, zorder=0)
+        ax.set_xlim(window.axis_bounds_s)
         summaries.append(
             {
                 "channel_name": channel_name,
@@ -278,14 +296,14 @@ def plot_stim_triggered_event(
         _plot_stim_row(
             axes_flat[-1],
             stim_uA,
-            event_slice,
+            window.sample_slice,
             sample_rate_hz,
             max_points,
-            display_bounds,
+            window,
             stim_channel_name,
         )
 
-    axes_flat[-1].set_xlabel("Time from stim onset (s)")
+    axes_flat[-1].set_xlabel("Time from stim trigger (s)")
     if used_envelope_any:
         axes_flat[-1].text(
             0.995,
@@ -312,6 +330,8 @@ def plot_stim_triggered_events_grid(
     stim_channel_name: str | None = None,
     stim_uA: np.ndarray | None = None,
     event_time_window: tuple[float, float] | None = None,
+    pre_time_s: float = 0.0,
+    post_time_window_s: tuple[float, float | None] | None = None,
 ) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
     """Plot all stim-triggered events in one grid, with three events per row."""
     if not filtered_channel_data:
@@ -347,10 +367,10 @@ def plot_stim_triggered_events_grid(
     amp_title = "all amplitudes" if amplitude_uV is None else (
         f"amplitude {amplitude_uV[0]:g} to {amplitude_uV[1]:g} uV"
     )
-    time_title = (
-        ""
-        if event_time_window is None
-        else f", event time {event_time_window[0]:g}-{event_time_window[1]:g} s"
+    time_title = _event_window_title(
+        event_time_window=event_time_window,
+        pre_time_s=pre_time_s,
+        post_time_window_s=post_time_window_s,
     )
     fig.suptitle(
         f"{folder.name}\n{len(events)} stim-triggered event(s), "
@@ -366,21 +386,28 @@ def plot_stim_triggered_events_grid(
     for event_index, event in enumerate(events):
         event_row = event_index // events_per_row
         event_col = event_index % events_per_row
-        event_slice, display_bounds = _event_display_slice(
-            event, sample_rate_hz, event_time_window
+        window = _event_display_window(
+            event,
+            sample_rate_hz,
+            event_time_window=event_time_window,
+            pre_time_s=pre_time_s,
+            post_time_window_s=post_time_window_s,
         )
 
         for channel_index, (channel_name, filtered_uV) in enumerate(filtered_channel_data):
             axis_row = event_row * rows_per_event + channel_index
             ax = axes[axis_row, event_col]
-            event_uV = filtered_uV[event_slice]
+            event_uV = filtered_uV[window.sample_slice]
             in_range = amplitude_mask(event_uV, amplitude_uV)
+            in_range = _apply_response_blank_mask(
+                in_range, event_uV.size, sample_rate_hz, window
+            )
             x_event, y_event, used_envelope = masked_envelope_for_display(
                 event_uV,
                 in_range,
                 sample_rate_hz,
                 max_points,
-                start_time_s=display_bounds[0],
+                start_time_s=window.data_start_s,
             )
             used_envelope_any = used_envelope_any or used_envelope
 
@@ -413,9 +440,10 @@ def plot_stim_triggered_events_grid(
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
             ax.tick_params(labelsize=7)
-            ax.set_xlim(display_bounds)
+            ax.axvline(0.0, color="0.78", linewidth=0.65, zorder=0)
+            ax.set_xlim(window.axis_bounds_s)
             if not has_stim_row and event_row == n_event_rows - 1 and channel_index == n_channels - 1:
-                ax.set_xlabel("Time from stim onset (s)", fontsize=7)
+                ax.set_xlabel("Time from stim trigger (s)", fontsize=7)
             summaries.append(
                 {
                     "event_number": event.event_number,
@@ -433,14 +461,14 @@ def plot_stim_triggered_events_grid(
             _plot_stim_row(
                 ax,
                 stim_uA,
-                event_slice,
+                window.sample_slice,
                 sample_rate_hz,
                 max_points,
-                display_bounds,
+                window,
                 stim_channel_name,
             )
             if event_row == n_event_rows - 1:
-                ax.set_xlabel("Time from stim onset (s)", fontsize=7)
+                ax.set_xlabel("Time from stim trigger (s)", fontsize=7)
 
     for event_index in range(len(events), n_event_rows * events_per_row):
         event_row = event_index // events_per_row
@@ -461,32 +489,70 @@ def plot_stim_triggered_events_grid(
     return fig, summaries
 
 
-def _event_display_slice(
+def _event_display_window(
     event: StimTriggeredEvent,
     sample_rate_hz: float,
-    event_time_window: tuple[float, float] | None,
-) -> tuple[slice, tuple[float, float]]:
-    if event_time_window is None:
-        start_s = 0.0
-        stop_s = event.duration_s
+    event_time_window: tuple[float, float] | None = None,
+    pre_time_s: float = 0.0,
+    post_time_window_s: tuple[float, float | None] | None = None,
+) -> EventDisplayWindow:
+    if post_time_window_s is not None:
+        pre_time_s = max(0.0, float(pre_time_s))
+        post_start_s = max(0.0, float(post_time_window_s[0]))
+        post_stop_value = post_time_window_s[1]
+        post_stop_s = (
+            event.duration_s
+            if post_stop_value is None
+            else min(event.duration_s, max(post_start_s, float(post_stop_value)))
+        )
+        axis_start_s = -pre_time_s
+        axis_stop_s = post_stop_s
+        response_blank_s = (0.0, post_start_s) if post_start_s > 0.0 else None
     else:
-        start_s = max(0.0, float(event_time_window[0]))
-        stop_s = min(event.duration_s, float(event_time_window[1]))
+        response_blank_s = None
+        if event_time_window is None:
+            axis_start_s = 0.0
+            axis_stop_s = event.duration_s
+        else:
+            axis_start_s = max(0.0, float(event_time_window[0]))
+            axis_stop_s = min(event.duration_s, float(event_time_window[1]))
 
-    if stop_s <= start_s:
-        start_s = min(start_s, event.duration_s)
-        stop_s = start_s
+    if axis_stop_s <= axis_start_s:
+        axis_start_s = min(axis_start_s, event.duration_s)
+        axis_stop_s = axis_start_s
 
     event_sample_count = event.end_sample - event.start_sample
-    start_offset = min(
-        event_sample_count, max(0, int(round(start_s * sample_rate_hz)))
+    start_sample = max(0, event.start_sample + int(round(axis_start_s * sample_rate_hz)))
+    stop_sample = min(
+        event.end_sample,
+        event.start_sample + max(0, int(round(axis_stop_s * sample_rate_hz))),
     )
-    stop_offset = min(
-        event_sample_count, max(start_offset, int(round(stop_s * sample_rate_hz)))
+    stop_sample = max(start_sample, stop_sample)
+    data_start_s = (start_sample - event.start_sample) / sample_rate_hz
+    return EventDisplayWindow(
+        sample_slice=slice(start_sample, stop_sample),
+        data_start_s=data_start_s,
+        axis_bounds_s=(axis_start_s, axis_stop_s),
+        response_blank_s=response_blank_s,
     )
-    start_sample = event.start_sample + start_offset
-    stop_sample = event.start_sample + stop_offset
-    return slice(start_sample, stop_sample), (start_s, stop_s)
+
+
+def _apply_response_blank_mask(
+    mask: np.ndarray,
+    n_samples: int,
+    sample_rate_hz: float,
+    window: EventDisplayWindow,
+) -> np.ndarray:
+    if window.response_blank_s is None or n_samples == 0:
+        return mask
+
+    blank_start_s, blank_stop_s = window.response_blank_s
+    if blank_stop_s <= blank_start_s:
+        return mask
+
+    relative_time_s = np.arange(n_samples, dtype=np.float64) / sample_rate_hz + window.data_start_s
+    keep = ~((relative_time_s >= blank_start_s) & (relative_time_s < blank_stop_s))
+    return mask & keep
 
 
 def _plot_stim_row(
@@ -495,7 +561,7 @@ def _plot_stim_row(
     event_slice: slice,
     sample_rate_hz: float,
     max_points: int,
-    display_bounds: tuple[float, float],
+    window: EventDisplayWindow,
     stim_channel_name: str | None,
 ) -> None:
     event_stim_uA = stim_uA[event_slice]
@@ -506,7 +572,7 @@ def _plot_stim_row(
             in_range,
             sample_rate_hz,
             max_points,
-            start_time_s=display_bounds[0],
+            start_time_s=window.data_start_s,
         )
         if x_stim.size:
             drawstyle = "default" if used_envelope else "steps-post"
@@ -526,7 +592,8 @@ def _plot_stim_row(
     y_limit = max(1.0, max_amp * 1.2)
     ax.axhline(0.0, color="0.45", linewidth=0.45, alpha=0.6)
     ax.set_ylim(-y_limit, y_limit)
-    ax.set_xlim(display_bounds)
+    ax.axvline(0.0, color="0.78", linewidth=0.65, zorder=0)
+    ax.set_xlim(window.axis_bounds_s)
     stim_label = "stim_data" if stim_channel_name is None else f"{stim_channel_name} stim"
     ax.text(
         0.01,
@@ -544,6 +611,25 @@ def _plot_stim_row(
     ax.spines["left"].set_zorder(0)
     ax.spines["bottom"].set_zorder(0)
     ax.tick_params(labelsize=7)
+
+
+def _event_window_title(
+    event_time_window: tuple[float, float] | None,
+    pre_time_s: float,
+    post_time_window_s: tuple[float, float | None] | None,
+) -> str:
+    if post_time_window_s is not None:
+        post_start_s, post_stop_s = post_time_window_s
+        if post_stop_s is None:
+            post_label = f"{post_start_s * 1e3:g}ms-end"
+        elif post_start_s > 0:
+            post_label = f"{post_start_s * 1e3:g}-{post_stop_s * 1e3:g}ms"
+        else:
+            post_label = f"{post_stop_s * 1e3:g}ms"
+        return f", pre {pre_time_s * 1e3:g}ms, post {post_label}"
+    if event_time_window is not None:
+        return f", event time {event_time_window[0]:g}-{event_time_window[1]:g} s"
+    return ""
 
 
 def _percent_true(mask: np.ndarray) -> float:

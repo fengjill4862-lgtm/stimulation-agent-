@@ -340,7 +340,7 @@ def plot_stim_triggered_events_grid(
         right=0.985,
         bottom=0.07,
         top=0.88,
-        hspace=0.55,
+        hspace=0.72,
         wspace=0.25,
     )
 
@@ -414,6 +414,8 @@ def plot_stim_triggered_events_grid(
             ax.spines["right"].set_visible(False)
             ax.tick_params(labelsize=7)
             ax.set_xlim(display_bounds)
+            if not has_stim_row and event_row == n_event_rows - 1 and channel_index == n_channels - 1:
+                ax.set_xlabel("Time from stim onset (s)", fontsize=7)
             summaries.append(
                 {
                     "event_number": event.event_number,
@@ -437,7 +439,8 @@ def plot_stim_triggered_events_grid(
                 display_bounds,
                 stim_channel_name,
             )
-            ax.set_xlabel("Time from stim onset (s)", fontsize=7)
+            if event_row == n_event_rows - 1:
+                ax.set_xlabel("Time from stim onset (s)", fontsize=7)
 
     for event_index in range(len(events), n_event_rows * events_per_row):
         event_row = event_index // events_per_row
@@ -510,9 +513,11 @@ def _plot_stim_row(
             ax.plot(
                 x_stim,
                 y_stim,
-                color="#111111",
-                linewidth=0.6,
+                color="#d62728",
+                linewidth=0.7,
                 drawstyle=drawstyle,
+                zorder=5,
+                clip_on=False,
             )
         max_amp = float(np.nanmax(np.abs(event_stim_uA)))
     else:
@@ -536,6 +541,8 @@ def _plot_stim_row(
     )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_zorder(0)
+    ax.spines["bottom"].set_zorder(0)
     ax.tick_params(labelsize=7)
 
 

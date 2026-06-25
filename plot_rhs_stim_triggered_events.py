@@ -189,6 +189,8 @@ def plot_stim_triggered_event(
     amplitude_uV: tuple[float, float] | None,
     max_points: int,
     stim_channel_name: str | None = None,
+    stim_uA: np.ndarray | None = None,
+    event_time_window: tuple[float, float] | None = None,
 ) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
     """Plot one event window from stim onset to immediately before next onset."""
     if not filtered_channel_data:
@@ -196,9 +198,11 @@ def plot_stim_triggered_event(
 
     channel_names = [item[0] for item in filtered_channel_data]
     n_channels = len(filtered_channel_data)
-    fig_height = max(5.0, 2.25 * n_channels + 2.0)
+    has_stim_row = stim_uA is not None
+    n_plot_rows = n_channels + (1 if has_stim_row else 0)
+    fig_height = max(5.0, 2.0 * n_channels + (1.25 if has_stim_row else 0.0) + 2.0)
     fig, axes = plt.subplots(
-        n_channels,
+        n_plot_rows,
         1,
         figsize=(15, fig_height),
         sharex=True,
@@ -220,7 +224,9 @@ def plot_stim_triggered_event(
     )
     fig.supylabel("filtered amplitude", x=0.035)
 
-    event_slice = slice(event.start_sample, event.end_sample)
+    event_slice, display_bounds = _event_display_slice(
+        event, sample_rate_hz, event_time_window
+    )
     summaries: list[dict[str, float | int | str]] = []
     used_envelope_any = False
     for ax, (channel_name, filtered_uV) in zip(axes_flat, filtered_channel_data):
@@ -231,7 +237,7 @@ def plot_stim_triggered_event(
             in_range,
             sample_rate_hz,
             max_points,
-            start_time_s=0.0,
+            start_time_s=display_bounds[0],
         )
         used_envelope_any = used_envelope_any or used_envelope
 
@@ -257,15 +263,26 @@ def plot_stim_triggered_event(
         )
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        ax.set_xlim(0.0, event.duration_s)
+        ax.set_xlim(display_bounds)
         summaries.append(
             {
                 "channel_name": channel_name,
                 "samples_total": int(event_uV.size),
                 "samples_in_amplitude_range": int(np.count_nonzero(in_range)),
-                "percent_in_amplitude_range": float(np.mean(in_range) * 100.0),
-                "filtered_rms_uV": float(np.sqrt(np.mean(event_uV**2))),
+                "percent_in_amplitude_range": _percent_true(in_range),
+                "filtered_rms_uV": _rms(event_uV),
             }
+        )
+
+    if has_stim_row:
+        _plot_stim_row(
+            axes_flat[-1],
+            stim_uA,
+            event_slice,
+            sample_rate_hz,
+            max_points,
+            display_bounds,
+            stim_channel_name,
         )
 
     axes_flat[-1].set_xlabel("Time from stim onset (s)")
@@ -293,6 +310,8 @@ def plot_stim_triggered_events_grid(
     max_points: int,
     events_per_row: int = 3,
     stim_channel_name: str | None = None,
+    stim_uA: np.ndarray | None = None,
+    event_time_window: tuple[float, float] | None = None,
 ) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
     """Plot all stim-triggered events in one grid, with three events per row."""
     if not filtered_channel_data:
@@ -303,11 +322,13 @@ def plot_stim_triggered_events_grid(
     events_per_row = max(1, int(events_per_row))
     channel_names = [item[0] for item in filtered_channel_data]
     n_channels = len(filtered_channel_data)
+    has_stim_row = stim_uA is not None
+    rows_per_event = n_channels + (1 if has_stim_row else 0)
     n_event_rows = int(np.ceil(len(events) / events_per_row))
-    n_plot_rows = n_event_rows * n_channels
+    n_plot_rows = n_event_rows * rows_per_event
 
     fig_width = max(12.0, 5.2 * events_per_row)
-    fig_height = max(4.0, 1.35 * n_plot_rows + 1.8)
+    fig_height = max(4.0, 1.22 * n_plot_rows + 1.9)
     fig, axes = plt.subplots(
         n_plot_rows,
         events_per_row,
@@ -326,10 +347,15 @@ def plot_stim_triggered_events_grid(
     amp_title = "all amplitudes" if amplitude_uV is None else (
         f"amplitude {amplitude_uV[0]:g} to {amplitude_uV[1]:g} uV"
     )
+    time_title = (
+        ""
+        if event_time_window is None
+        else f", event time {event_time_window[0]:g}-{event_time_window[1]:g} s"
+    )
     fig.suptitle(
         f"{folder.name}\n{len(events)} stim-triggered event(s), "
         f"3 per row; {channel_selection_label(channel_names)} "
-        f"{format_bandpass_plot_label(band_hz)}, {amp_title}",
+        f"{format_bandpass_plot_label(band_hz)}, {amp_title}{time_title}",
         fontsize=11,
         y=0.975,
     )
@@ -340,10 +366,12 @@ def plot_stim_triggered_events_grid(
     for event_index, event in enumerate(events):
         event_row = event_index // events_per_row
         event_col = event_index % events_per_row
-        event_slice = slice(event.start_sample, event.end_sample)
+        event_slice, display_bounds = _event_display_slice(
+            event, sample_rate_hz, event_time_window
+        )
 
         for channel_index, (channel_name, filtered_uV) in enumerate(filtered_channel_data):
-            axis_row = event_row * n_channels + channel_index
+            axis_row = event_row * rows_per_event + channel_index
             ax = axes[axis_row, event_col]
             event_uV = filtered_uV[event_slice]
             in_range = amplitude_mask(event_uV, amplitude_uV)
@@ -352,7 +380,7 @@ def plot_stim_triggered_events_grid(
                 in_range,
                 sample_rate_hz,
                 max_points,
-                start_time_s=0.0,
+                start_time_s=display_bounds[0],
             )
             used_envelope_any = used_envelope_any or used_envelope
 
@@ -385,23 +413,37 @@ def plot_stim_triggered_events_grid(
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
             ax.tick_params(labelsize=7)
-            ax.set_xlim(0.0, event.duration_s)
+            ax.set_xlim(display_bounds)
             summaries.append(
                 {
                     "event_number": event.event_number,
                     "channel_name": channel_name,
                     "samples_total": int(event_uV.size),
                     "samples_in_amplitude_range": int(np.count_nonzero(in_range)),
-                    "percent_in_amplitude_range": float(np.mean(in_range) * 100.0),
-                    "filtered_rms_uV": float(np.sqrt(np.mean(event_uV**2))),
+                    "percent_in_amplitude_range": _percent_true(in_range),
+                    "filtered_rms_uV": _rms(event_uV),
                 }
             )
+
+        if has_stim_row:
+            stim_axis_row = event_row * rows_per_event + n_channels
+            ax = axes[stim_axis_row, event_col]
+            _plot_stim_row(
+                ax,
+                stim_uA,
+                event_slice,
+                sample_rate_hz,
+                max_points,
+                display_bounds,
+                stim_channel_name,
+            )
+            ax.set_xlabel("Time from stim onset (s)", fontsize=7)
 
     for event_index in range(len(events), n_event_rows * events_per_row):
         event_row = event_index // events_per_row
         event_col = event_index % events_per_row
-        for channel_index in range(n_channels):
-            axes[event_row * n_channels + channel_index, event_col].set_visible(False)
+        for row_index in range(rows_per_event):
+            axes[event_row * rows_per_event + row_index, event_col].set_visible(False)
 
     if used_envelope_any:
         fig.text(
@@ -414,6 +456,99 @@ def plot_stim_triggered_events_grid(
             color="0.35",
         )
     return fig, summaries
+
+
+def _event_display_slice(
+    event: StimTriggeredEvent,
+    sample_rate_hz: float,
+    event_time_window: tuple[float, float] | None,
+) -> tuple[slice, tuple[float, float]]:
+    if event_time_window is None:
+        start_s = 0.0
+        stop_s = event.duration_s
+    else:
+        start_s = max(0.0, float(event_time_window[0]))
+        stop_s = min(event.duration_s, float(event_time_window[1]))
+
+    if stop_s <= start_s:
+        start_s = min(start_s, event.duration_s)
+        stop_s = start_s
+
+    event_sample_count = event.end_sample - event.start_sample
+    start_offset = min(
+        event_sample_count, max(0, int(round(start_s * sample_rate_hz)))
+    )
+    stop_offset = min(
+        event_sample_count, max(start_offset, int(round(stop_s * sample_rate_hz)))
+    )
+    start_sample = event.start_sample + start_offset
+    stop_sample = event.start_sample + stop_offset
+    return slice(start_sample, stop_sample), (start_s, stop_s)
+
+
+def _plot_stim_row(
+    ax,
+    stim_uA: np.ndarray,
+    event_slice: slice,
+    sample_rate_hz: float,
+    max_points: int,
+    display_bounds: tuple[float, float],
+    stim_channel_name: str | None,
+) -> None:
+    event_stim_uA = stim_uA[event_slice]
+    if event_stim_uA.size:
+        in_range = np.ones(event_stim_uA.shape, dtype=bool)
+        x_stim, y_stim, used_envelope = masked_envelope_for_display(
+            event_stim_uA,
+            in_range,
+            sample_rate_hz,
+            max_points,
+            start_time_s=display_bounds[0],
+        )
+        if x_stim.size:
+            drawstyle = "default" if used_envelope else "steps-post"
+            ax.plot(
+                x_stim,
+                y_stim,
+                color="#111111",
+                linewidth=0.6,
+                drawstyle=drawstyle,
+            )
+        max_amp = float(np.nanmax(np.abs(event_stim_uA)))
+    else:
+        max_amp = 0.0
+
+    y_limit = max(1.0, max_amp * 1.2)
+    ax.axhline(0.0, color="0.45", linewidth=0.45, alpha=0.6)
+    ax.set_ylim(-y_limit, y_limit)
+    ax.set_xlim(display_bounds)
+    stim_label = "stim_data" if stim_channel_name is None else f"{stim_channel_name} stim"
+    ax.text(
+        0.01,
+        0.86,
+        stim_label,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=7,
+        fontweight="bold",
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 1},
+    )
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.tick_params(labelsize=7)
+
+
+def _percent_true(mask: np.ndarray) -> float:
+    if mask.size == 0:
+        return 0.0
+    return float(np.mean(mask) * 100.0)
+
+
+def _rms(values: np.ndarray) -> float:
+    if values.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(values**2)))
 
 
 def _safe_label(text: str) -> str:

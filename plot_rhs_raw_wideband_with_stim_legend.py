@@ -301,6 +301,18 @@ def read_rhs_folder(folder: Path, channel_name: str) -> tuple[np.ndarray, np.nda
     return raw_uV, stim_uA, sample_rate_hz, loaded
 
 
+def read_rhs_amplifier_channel_names(folder: Path) -> list[str]:
+    """Return amplifier channel names from the first .rhs file in a folder."""
+    rhs_files = sorted(folder.expanduser().glob("*.rhs"))
+    if not rhs_files:
+        raise FileNotFoundError(f"No .rhs files found in {folder}")
+
+    first_file = rhs_files[0]
+    with first_file.open("rb") as fid:
+        header = _read_header(fid, first_file, first_file.stat().st_size)
+    return list(header.amplifier_channels)
+
+
 def default_output_path(folder: Path, channel_name: str) -> Path:
     safe_channel = _safe_channel_label(channel_name)
     return folder / f"raw_wideband_{safe_channel}.png"

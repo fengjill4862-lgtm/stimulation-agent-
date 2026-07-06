@@ -349,6 +349,26 @@ def parse_channel_selection(text: str) -> list[str]:
     return channels
 
 
+def resolve_channel_selection(text: str, folder: Path) -> list[str]:
+    """Parse explicit channels, or resolve 'all' to recorded RHS channels."""
+    cleaned = text.strip()
+    if cleaned.lower() not in {"all", "all channels", "*"}:
+        return parse_channel_selection(cleaned)
+
+    folder = folder.expanduser()
+    if not folder.exists():
+        raise ValueError(f"Folder not found: {folder}")
+
+    try:
+        channels = read_rhs_amplifier_channel_names(folder)
+    except FileNotFoundError as exc:
+        raise ValueError(str(exc)) from exc
+
+    if not channels:
+        raise ValueError(f"No recorded amplifier channels found in {folder}.")
+    return channels
+
+
 def _expand_channel_part(part: str) -> list[str]:
     normalized = part.strip().replace("–", "-").replace("—", "-").replace("−", "-")
     range_match = re.fullmatch(

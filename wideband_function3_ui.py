@@ -25,9 +25,9 @@ from IPython.display import display
 from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
     find_stim_channel_in_data,
-    parse_channel_selection,
     read_rhs_amplifier_channel_names,
     read_rhs_folder,
+    resolve_channel_selection,
 )
 from plot_rhs_filtered_wideband import (
     format_bandpass_status,
@@ -59,7 +59,7 @@ def show_function3_stim_triggered_events(
     event_channel_text = widgets.Text(
         value="A-014",
         description="Channels",
-        placeholder="A-014 or A-014-16",
+        placeholder="all, A-014, or A-014-16",
         layout=widgets.Layout(width="240px"),
         style={"description_width": "75px"},
     )
@@ -176,7 +176,7 @@ def show_function3_stim_triggered_events(
             return
 
         try:
-            channels = parse_channel_selection(event_channel_text.value)
+            channels = resolve_channel_selection(event_channel_text.value, data_folder)
             band_hz = parse_frequency_range(event_bandpass_text.value)
             amplitude_uV = parse_amplitude_range(event_amplitude_text.value)
             pre_time_ms = _parse_pre_time_ms(event_pre_time_float.value)

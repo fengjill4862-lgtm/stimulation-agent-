@@ -59,10 +59,18 @@ def show_function4_recorded_response_only(namespace: MutableMapping[str, object]
     _run_block(_BLOCK_4_SOURCE, namespace)
 
 
+def show_function5_power_analysis(namespace: MutableMapping[str, object] | None = None) -> None:
+    """Launch Function 5: Event-locked power analysis."""
+    from wideband_function5_power_ui import show_function5_power_analysis as _show_function5
+
+    _show_function5(namespace)
+
+
 __all__ = [
     "show_function0_rename_rhs_folders",
     "show_function1_raw_wideband",
     "show_function2_bandpass_filtered",
     "show_function3_stim_triggered_events",
     "show_function4_recorded_response_only",
+    "show_function5_power_analysis",
 ]

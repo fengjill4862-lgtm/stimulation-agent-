@@ -105,8 +105,8 @@ Three things worth knowing:
 
 ## Environment
 
-The currently working interpreter is Python 3.12.0. Packages observed at this
-handoff:
+The correct interpreter is **`/usr/local/bin/python3` (3.12.0)**. Packages
+observed at this handoff:
 
 ```text
 numpy 2.4.6
@@ -123,8 +123,29 @@ Install the required packages on another environment with:
 python3 -m pip install numpy scipy matplotlib ipywidgets ipython jupyter
 ```
 
-VS Code also needs its Python and Jupyter extensions. The notebook kernel should
-point to the interpreter where those packages are installed.
+VS Code also needs its Python and Jupyter extensions.
+
+### Two interpreters live on this machine -- pick deliberately
+
+```text
+/usr/local/bin/python3        3.12.0   numpy 2.4.6   scipy 1.18.0   matplotlib 3.11.0   ipywidgets 8.1.8
+/Users/jf/opt/anaconda3/bin/python3   3.9.7    numpy 1.20.3  scipy 1.7.1    matplotlib 3.4.3    ipywidgets 7.6.5
+```
+
+Bare `python3` on PATH resolves to **anaconda 3.9.7**, not the 3.12 environment.
+Two consequences:
+
+1. **Notebook kernel.** Select the `Python 3.12 (RHS analysis)` kernel
+   (kernelspec `py312-rhs`). The anaconda kernel has ipywidgets 7.6.5, and VS
+   Code's renderer targets ipywidgets 8 -- widgets silently render as nothing,
+   with no error in the cell. If the UI ever appears blank, check the kernel
+   before suspecting the code.
+2. **Batch runner.** Invoke it as `/usr/local/bin/python3
+   batch_run_wideband_main_ui.py ...`, not bare `python3`. The two stacks are 11
+   scipy minor versions and a matplotlib generation apart, so the same session
+   analyzed under each will not produce identical PNGs. Do not compare batch
+   output produced under one interpreter with notebook output produced under the
+   other.
 
 The UI uses Matplotlib's noninteractive `Agg` backend and renders PNG bytes into
 `ipywidgets.Image`, so plots appear inline rather than in pop-up windows. It

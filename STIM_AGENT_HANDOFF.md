@@ -140,6 +140,30 @@ Two consequences:
    Code's renderer targets ipywidgets 8 -- widgets silently render as nothing,
    with no error in the cell. If the UI ever appears blank, check the kernel
    before suspecting the code.
+### Running the notebook in JupyterLab instead of VS Code
+
+The VS Code install on this machine is ~2 years old (its Jupyter extension is
+pinned at `2023.11`, which bundles the ipywidgets **7**-era renderer). Against an
+ipywidgets 8 kernel that renderer produces **no widgets and no error**. A CDN
+workaround is set in VS Code user settings
+(`jupyter.widgetScriptSources: ["jsdelivr.com","unpkg.com"]`), which works but
+needs internet and only applies to webviews created after the setting.
+
+JupyterLab 4.6.3 is installed in the 3.12 environment and needs no workaround:
+
+```bash
+cd "/Users/jf/Claude/Matlab code"
+/usr/local/bin/python3 -m jupyterlab
+```
+
+Do **not** run bare `jupyter lab`. `jupyter`, `jupyter-lab` and `pip3` on PATH
+all resolve to anaconda 3.9.7, which has ipywidgets 7.6.5 and would reproduce
+the blank-widget problem. Install into this environment with
+`/usr/local/bin/python3 -m pip install ...`, never bare `pip3`.
+
+Inside either front end, select the **`py312-rhs`** kernel
+("Python 3.12 (RHS analysis)").
+
 2. **Batch runner.** Invoke it as `/usr/local/bin/python3
    batch_run_wideband_main_ui.py ...`, not bare `python3`. The two stacks are 11
    scipy minor versions and a matplotlib generation apart, so the same session

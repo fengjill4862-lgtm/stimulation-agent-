@@ -27,6 +27,7 @@ from plot_rhs_raw_wideband_with_stim_legend import (
     sample_slice_for_time_window,
     time_window_label,
 )
+from rhs_naming import channel_label_collapsed, signed_number_plain_decimal, signed_number_token
 
 
 _NUMBER_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
@@ -168,8 +169,8 @@ def default_filtered_output_path(
     if amplitude_uV is None:
         amp_label = "allAmp"
     else:
-        low_label = _format_signed_for_filename(amplitude_uV[0])
-        high_label = _format_signed_for_filename(amplitude_uV[1])
+        low_label = signed_number_plain_decimal(amplitude_uV[0])
+        high_label = signed_number_plain_decimal(amplitude_uV[1])
         amp_label = f"{low_label}-to-{high_label}uV"
     return folder / f"filtered_wideband_{safe_channel}_{band_label}_{amp_label}.png"
 
@@ -188,29 +189,19 @@ def default_response_output_path(
     stim information. Kept here rather than in the UI layer so the notebook and
     the batch runner cannot drift apart on filenames.
     """
-    safe_channel = _response_safe_label(channel_label)
+    safe_channel = channel_label_collapsed(channel_label)
     band_label = format_bandpass_filename_label(band_hz).replace(".", "p")
     if amplitude_uV is None:
         amp_label = "allAmp"
     else:
         amp_label = (
-            f"{_response_signed_number(amplitude_uV[0])}-to-"
-            f"{_response_signed_number(amplitude_uV[1])}uV"
+            f"{signed_number_token(amplitude_uV[0])}-to-"
+            f"{signed_number_token(amplitude_uV[1])}uV"
         )
     return folder / (
         f"recorded_response_{safe_channel}_{band_label}_{amp_label}_"
         f"{time_window_label(time_window)}.png"
     )
-
-
-def _response_safe_label(text: str) -> str:
-    safe = text.strip().replace(" ", "_").replace("/", "_").replace(":", "_")
-    return safe.replace(",", "_").replace("-", "").replace("__", "_") or "channels"
-
-
-def _response_signed_number(value: float) -> str:
-    formatted = f"{abs(value):g}".replace(".", "p")
-    return f"neg{formatted}" if value < 0 else formatted
 
 
 def format_bandpass_filename_label(band_hz: tuple[float, float] | None) -> str:
@@ -229,13 +220,6 @@ def format_bandpass_status(band_hz: tuple[float, float] | None) -> str:
     if band_hz is None:
         return "using all recorded frequencies"
     return f"applying {band_hz[0]:g}-{band_hz[1]:g} Hz bandpass"
-
-
-def _format_signed_for_filename(value: float) -> str:
-    """Format signed values without filename-confusing leading minus signs."""
-    if value < 0:
-        return f"neg{abs(value):g}"
-    return f"{value:g}"
 
 
 def plot_filtered_channels(

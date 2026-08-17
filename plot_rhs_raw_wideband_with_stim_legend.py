@@ -30,6 +30,7 @@ if "--no-show" in sys.argv:
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
+from rhs_naming import channel_label
 
 
 SAMPLES_PER_DATA_BLOCK = 128
@@ -314,14 +315,8 @@ def read_rhs_amplifier_channel_names(folder: Path) -> list[str]:
 
 
 def default_output_path(folder: Path, channel_name: str) -> Path:
-    safe_channel = _safe_channel_label(channel_name)
+    safe_channel = channel_label(channel_name)
     return folder / f"raw_wideband_{safe_channel}.png"
-
-
-def _safe_channel_label(channel_text: str) -> str:
-    safe = channel_text.strip().replace("-", "").replace(" ", "_")
-    safe = safe.replace(",", "_").replace(":", "_").replace("/", "_")
-    return safe or "channels"
 
 
 def parse_channel_selection(text: str) -> list[str]:

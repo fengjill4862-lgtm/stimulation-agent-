@@ -61,6 +61,7 @@ from plot_rhs_stim_triggered_events import (
     filter_channel_data,
     plot_stim_triggered_events_grid,
 )
+from rhs_naming import number_token
 
 
 @dataclass(frozen=True)
@@ -208,16 +209,12 @@ def read_rhs_folder_selected_channels(folder: Path, channels: list[str]) -> RhsF
 
 def event_window_label(pre_time_ms: float, post_window_ms: tuple[float, float | None]) -> str:
     """Mirror Function 3's filename window label."""
-    pre_label = _number_label(pre_time_ms)
+    pre_label = number_token(pre_time_ms)
     if post_window_ms[1] is None:
-        post_label = f"0to{_number_label(post_window_ms[0])}ms"
+        post_label = f"0to{number_token(post_window_ms[0])}ms"
     else:
-        post_label = f"{_number_label(post_window_ms[0])}to{_number_label(post_window_ms[1])}ms"
+        post_label = f"{number_token(post_window_ms[0])}to{number_token(post_window_ms[1])}ms"
     return f"pre{pre_label}ms_post{post_label}"
-
-
-def _number_label(value: float) -> str:
-    return f"{value:g}".replace("-", "neg").replace(".", "p")
 
 
 def run_raw_plot(

@@ -33,6 +33,7 @@ from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
     sample_slice_for_time_window,
 )
+from rhs_naming import channel_label_collapsed, ms_label, ms_number, number_token, signed_number_token
 
 
 @dataclass(frozen=True)
@@ -159,11 +160,11 @@ def default_stim_events_grid_output_path(
     event_count: int,
 ) -> Path:
     """Name the single combined PNG containing all stim-triggered events."""
-    safe_channel = _safe_label(channel_label)
+    safe_channel = channel_label_collapsed(channel_label)
     band_label = format_bandpass_filename_label(band_hz).replace(".", "p")
     amp_label = "allAmp" if amplitude_uV is None else (
-        f"{_format_signed_number(amplitude_uV[0])}-to-"
-        f"{_format_signed_number(amplitude_uV[1])}uV"
+        f"{signed_number_token(amplitude_uV[0])}-to-"
+        f"{signed_number_token(amplitude_uV[1])}uV"
     )
     return (
         folder
@@ -498,21 +499,6 @@ def _rms(values: np.ndarray) -> float:
     return float(np.sqrt(np.mean(values**2)))
 
 
-def _safe_label(text: str) -> str:
-    safe = text.strip().replace(" ", "_").replace("/", "_").replace(":", "_")
-    return safe.replace(",", "_").replace("-", "").replace("__", "_") or "channels"
-
-
-def _format_number(value: float) -> str:
-    return f"{value:g}".replace("-", "neg").replace(".", "p")
-
-
-def _format_signed_number(value: float) -> str:
-    if value < 0:
-        return f"neg{_format_number(abs(value))}"
-    return _format_number(value)
-
-
 # -----------------------------------------------------------------------------
 # Event window parsing and filename labels.
 #
@@ -557,20 +543,14 @@ def parse_post_time_ms(value: str) -> tuple[float, float | None]:
 
 
 def event_window_label(pre_time_ms: float, post_window_ms: tuple[float, float | None]) -> str:
-    pre_label = _ms_label(pre_time_ms)
+    pre_label = ms_label(pre_time_ms)
     post_start_ms, post_stop_ms = post_window_ms
     if post_stop_ms is None:
-        post_label = f"{_ms_number(post_start_ms)}toEnd"
+        post_label = f"{ms_number(post_start_ms)}toEnd"
     elif post_start_ms > 0:
-        post_label = f"{_ms_number(post_start_ms)}to{_ms_label(post_stop_ms)}"
+        post_label = f"{ms_number(post_start_ms)}to{ms_label(post_stop_ms)}"
     else:
-        post_label = _ms_label(post_stop_ms)
+        post_label = ms_label(post_stop_ms)
     return f"pre{pre_label}_post{post_label}"
 
 
-def _ms_label(value: float) -> str:
-    return f"{_ms_number(value)}ms"
-
-
-def _ms_number(value: float) -> str:
-    return f"{value:g}".replace(".", "p")

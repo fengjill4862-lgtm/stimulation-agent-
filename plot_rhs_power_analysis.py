@@ -28,6 +28,7 @@ from plot_rhs_raw_wideband_with_stim_legend import (
     find_pulse_segments,
 )
 from plot_rhs_stim_triggered_events import build_stim_triggered_events
+from rhs_naming import number_token, safe_token
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ def parse_power_bands(text: str) -> list[PowerBand]:
             raise ValueError(f"Power band must be positive and increasing: {part}")
         first_number = re.findall(_UNSIGNED_NUMBER_PATTERN, normalized)[0]
         name_text = normalized[: normalized.find(first_number)].strip(" :-_,")
-        name = _safe_name(name_text) if name_text else f"band{index}_{low_hz:g}-{high_hz:g}Hz"
+        name = safe_token(name_text) if name_text else f"band{index}_{low_hz:g}-{high_hz:g}Hz"
         bands.append(PowerBand(name=name, low_hz=low_hz, high_hz=high_hz))
 
     if not bands:
@@ -132,11 +133,11 @@ def default_prepost_power_output_paths(
     step_s: float,
 ) -> tuple[Path, Path]:
     """Return PNG and CSV paths for pre/post neuromodulation power."""
-    channel_label = _safe_name(channel_selection_label(channels))
+    channel_label = safe_token(channel_selection_label(channels))
     band_label = _bands_label_for_filename(bands)
     stem = (
         f"power_prepost_{channel_label}_{band_label}_"
-        f"win{_number_label(window_s)}s_step{_number_label(step_s)}s"
+        f"win{number_token(window_s)}s_step{number_token(step_s)}s"
     )
     return folder / f"{stem}.png", folder / f"{stem}.csv"
 
@@ -150,7 +151,7 @@ def default_power_output_paths(
     blank_window_ms: tuple[float, float] = (-10.0, 50.0),
 ) -> tuple[Path, Path]:
     """Return PNG and CSV paths for stim-triggered power."""
-    channel_label = _safe_name(channel_selection_label(channels))
+    channel_label = safe_token(channel_selection_label(channels))
     band_label = _bands_label_for_filename(bands)
     baseline_label = _window_label_for_filename("base", baseline_window)
     post_label = "_".join(
@@ -158,8 +159,8 @@ def default_power_output_paths(
         for index, window in enumerate(post_windows, start=1)
     )
     blank_label = (
-        f"blank{_number_label(blank_window_ms[0])}to"
-        f"{_number_label(blank_window_ms[1])}ms"
+        f"blank{number_token(blank_window_ms[0])}to"
+        f"{number_token(blank_window_ms[1])}ms"
     )
     stem = (
         f"power_event_{channel_label}_{band_label}_"
@@ -812,7 +813,7 @@ def _format_optional_float(value: object) -> str:
 
 def _bands_label_for_filename(bands: Sequence[PowerBand]) -> str:
     band_label = "_".join(
-        _safe_name(f"{band.name}_{band.low_hz:g}-{band.high_hz:g}Hz") for band in bands
+        safe_token(f"{band.name}_{band.low_hz:g}-{band.high_hz:g}Hz") for band in bands
     )
     if len(band_label) > 80:
         band_label = f"{len(bands)}bands"
@@ -857,14 +858,7 @@ def _parse_range_numbers(text: str, allow_signed: bool) -> tuple[float, float] |
     return None
 
 
-def _safe_name(text: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", text.strip())
-    return safe.strip("_") or "value"
-
-
 def _window_label_for_filename(prefix: str, window: TimeWindowMs) -> str:
-    return f"{prefix}_{_number_label(window.start_ms)}to{_number_label(window.end_ms)}ms"
+    return f"{prefix}_{number_token(window.start_ms)}to{number_token(window.end_ms)}ms"
 
 
-def _number_label(value: float) -> str:
-    return f"{value:g}".replace("-", "neg").replace(".", "p")

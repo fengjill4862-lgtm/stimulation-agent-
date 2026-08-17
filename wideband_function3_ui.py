@@ -300,7 +300,8 @@ def show_function3_stim_triggered_events(
             display(
                 widgets.HTML(
                     value=(
-                        f"<b>{len(events)} event(s) in one PNG</b>, 3 events per row; "
+                        f"<b>{len(events)} event(s) in one PNG</b>, "
+                        f"{min(3, len(events))} events per row; "
                         f"window {window_label}; "
                         f"stim current {'shown' if show_stim_current else 'hidden'}; "
                         f"target {output_path.name}"

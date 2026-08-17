@@ -195,7 +195,9 @@ def plot_stim_triggered_events_grid(
     if not events:
         raise ValueError("No stim-triggered events were provided.")
 
-    events_per_row = max(1, int(events_per_row))
+    # Never lay out more columns than there are events, or a 1-event run gets
+    # two empty columns across the full width.
+    events_per_row = min(max(1, int(events_per_row)), len(events))
     channel_names = [item[0] for item in filtered_channel_data]
     n_channels = len(filtered_channel_data)
     has_stim_row = stim_uA is not None
@@ -203,8 +205,15 @@ def plot_stim_triggered_events_grid(
     n_event_rows = int(np.ceil(len(events) / events_per_row))
     n_plot_rows = n_event_rows * rows_per_event
 
+    # Header/footer are fixed bands measured in inches. Expressing them as
+    # figure fractions made them grow with the row count: a 50-event, 9-row
+    # figure is ~189 in tall, so top=0.88/bottom=0.07 reserved 22 in of blank
+    # above the plots and 13 in below.
+    header_in = 0.85
+    footer_in = 0.5
+
     fig_width = max(12.0, 5.2 * events_per_row)
-    fig_height = max(4.0, 1.22 * n_plot_rows + 1.9)
+    fig_height = max(4.0, 1.22 * n_plot_rows + header_in + footer_in)
     fig, axes = plt.subplots(
         n_plot_rows,
         events_per_row,
@@ -214,8 +223,8 @@ def plot_stim_triggered_events_grid(
     fig.subplots_adjust(
         left=0.08,
         right=0.985,
-        bottom=0.07,
-        top=0.88,
+        bottom=footer_in / fig_height,
+        top=1.0 - header_in / fig_height,
         hspace=0.72,
         wspace=0.25,
     )
@@ -230,10 +239,10 @@ def plot_stim_triggered_events_grid(
     )
     fig.suptitle(
         f"{folder.name}\n{len(events)} stim-triggered event(s), "
-        f"3 per row; {channel_selection_label(channel_names)} "
+        f"{events_per_row} per row; {channel_selection_label(channel_names)} "
         f"{format_bandpass_plot_label(band_hz)}, {amp_title}{time_title}",
         fontsize=11,
-        y=0.975,
+        y=1.0 - 0.15 / fig_height,
     )
     fig.supylabel("filtered amplitude", x=0.02)
 
@@ -335,7 +344,7 @@ def plot_stim_triggered_events_grid(
     if used_envelope_any:
         fig.text(
             0.985,
-            0.015,
+            0.08 / fig_height,
             "displayed as min/max envelope",
             ha="right",
             va="bottom",

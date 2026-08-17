@@ -34,6 +34,8 @@ from plot_rhs_raw_wideband_with_stim_legend import (
 
 
 @dataclass(frozen=True)
+
+
 class StimTriggeredEvent:
     event_number: int
     start_sample: int
@@ -47,6 +49,8 @@ class StimTriggeredEvent:
 
 
 @dataclass(frozen=True)
+
+
 class EventDisplayWindow:
     sample_slice: slice
     data_start_s: float
@@ -144,28 +148,6 @@ def filter_channel_data(
     ]
 
 
-def default_stim_event_output_path(
-    folder: Path,
-    channel_label: str,
-    band_hz: tuple[float, float] | None,
-    amplitude_uV: tuple[float, float] | None,
-    time_label: str,
-    event: StimTriggeredEvent,
-) -> Path:
-    safe_channel = _safe_label(channel_label)
-    band_label = format_bandpass_filename_label(band_hz).replace(".", "p")
-    amp_label = "allAmp" if amplitude_uV is None else (
-        f"{_format_signed_number(amplitude_uV[0])}-to-"
-        f"{_format_signed_number(amplitude_uV[1])}uV"
-    )
-    onset_label = _format_number(event.onset_s)
-    return (
-        folder
-        / f"stim_event_{event.event_number:03d}_{safe_channel}_{band_label}_"
-        f"{amp_label}_{time_label}_onset{onset_label}s.png"
-    )
-
-
 def default_stim_events_grid_output_path(
     folder: Path,
     channel_label: str,
@@ -186,136 +168,6 @@ def default_stim_events_grid_output_path(
         / f"stim_events_all_{safe_channel}_{band_label}_{amp_label}_"
         f"{time_label}_{event_count:03d}events.png"
     )
-
-
-def plot_stim_triggered_event(
-    filtered_channel_data: Sequence[tuple[str, np.ndarray]],
-    sample_rate_hz: float,
-    folder: Path,
-    event: StimTriggeredEvent,
-    band_hz: tuple[float, float] | None,
-    amplitude_uV: tuple[float, float] | None,
-    max_points: int,
-    stim_channel_name: str | None = None,
-    stim_uA: np.ndarray | None = None,
-    event_time_window: tuple[float, float] | None = None,
-    pre_time_s: float = 0.0,
-    post_time_window_s: tuple[float, float | None] | None = None,
-) -> tuple[plt.Figure, list[dict[str, float | int | str]]]:
-    """Plot one event window from stim onset to immediately before next onset."""
-    if not filtered_channel_data:
-        raise ValueError("No channel data was provided.")
-
-    channel_names = [item[0] for item in filtered_channel_data]
-    n_channels = len(filtered_channel_data)
-    has_stim_row = stim_uA is not None
-    n_plot_rows = n_channels + (1 if has_stim_row else 0)
-    fig_height = max(5.0, 2.0 * n_channels + (1.25 if has_stim_row else 0.0) + 2.0)
-    fig, axes = plt.subplots(
-        n_plot_rows,
-        1,
-        figsize=(15, fig_height),
-        sharex=True,
-        squeeze=False,
-    )
-    axes_flat = axes.ravel()
-    fig.subplots_adjust(left=0.13, right=0.98, bottom=0.10, top=0.82, hspace=0.24)
-
-    amp_title = "all amplitudes" if amplitude_uV is None else (
-        f"amplitude {amplitude_uV[0]:g} to {amplitude_uV[1]:g} uV"
-    )
-    fig.suptitle(
-        f"{folder.name}\nStim event {event.event_number:03d}: "
-        f"onset {event.onset_s:g} s, duration {event.duration_s:g} s\n"
-        f"{channel_selection_label(channel_names)} "
-        f"{format_bandpass_plot_label(band_hz)}, {amp_title}",
-        fontsize=11,
-        y=0.97,
-    )
-    fig.supylabel("filtered amplitude", x=0.035)
-
-    window = _event_display_window(
-        event,
-        sample_rate_hz,
-        event_time_window=event_time_window,
-        pre_time_s=pre_time_s,
-        post_time_window_s=post_time_window_s,
-    )
-    summaries: list[dict[str, float | int | str]] = []
-    used_envelope_any = False
-    for ax, (channel_name, filtered_uV) in zip(axes_flat, filtered_channel_data):
-        event_uV = filtered_uV[window.sample_slice]
-        in_range = amplitude_mask(event_uV, amplitude_uV)
-        in_range = _apply_response_blank_mask(
-            in_range, event_uV.size, sample_rate_hz, window
-        )
-        x_event, y_event, used_envelope = masked_envelope_for_display(
-            event_uV,
-            in_range,
-            sample_rate_hz,
-            max_points,
-            start_time_s=window.data_start_s,
-        )
-        used_envelope_any = used_envelope_any or used_envelope
-
-        if x_event.size:
-            ax.plot(x_event, y_event, color="#d62728", linewidth=0.8)
-
-        if amplitude_uV is not None:
-            low_uV, high_uV = amplitude_uV
-            ax.axhline(low_uV, color="#d62728", linewidth=0.7, alpha=0.35)
-            ax.axhline(high_uV, color="#d62728", linewidth=0.7, alpha=0.35)
-            ax.set_ylim(low_uV, high_uV)
-
-        channel_label = f"{channel_name} *" if channel_name == stim_channel_name else channel_name
-        ax.text(
-            -0.045,
-            0.5,
-            channel_label,
-            transform=ax.transAxes,
-            ha="right",
-            va="center",
-            fontsize=10,
-            fontweight="bold",
-        )
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.axvline(0.0, color="0.78", linewidth=0.75, zorder=0)
-        ax.set_xlim(window.axis_bounds_s)
-        summaries.append(
-            {
-                "channel_name": channel_name,
-                "samples_total": int(event_uV.size),
-                "samples_in_amplitude_range": int(np.count_nonzero(in_range)),
-                "percent_in_amplitude_range": _percent_true(in_range),
-                "filtered_rms_uV": _rms(event_uV),
-            }
-        )
-
-    if has_stim_row:
-        _plot_stim_row(
-            axes_flat[-1],
-            stim_uA,
-            window.sample_slice,
-            sample_rate_hz,
-            max_points,
-            window,
-            stim_channel_name,
-        )
-
-    axes_flat[-1].set_xlabel("Time from stim trigger (s)")
-    if used_envelope_any:
-        axes_flat[-1].text(
-            0.995,
-            0.01,
-            "displayed as min/max envelope",
-            transform=axes_flat[-1].transAxes,
-            ha="right",
-            va="bottom",
-            fontsize=8,
-            color="0.35",
-        )
-    return fig, summaries
 
 
 def plot_stim_triggered_events_grid(

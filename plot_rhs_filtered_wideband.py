@@ -82,14 +82,6 @@ def parse_amplitude_range(text: str, unit_name: str = "amplitude uV") -> tuple[f
     return low, high
 
 
-def parse_numeric_range(text: str, unit_name: str) -> tuple[float, float]:
-    """Backward-compatible positive range parser for older notebook cells."""
-    value = parse_frequency_range(text, unit_name)
-    if value is None:
-        raise ValueError(f"Enter {unit_name} as a range, e.g. 200-400.")
-    return value
-
-
 def bandpass_filter_wideband(
     raw_uV: np.ndarray,
     sample_rate_hz: float,
@@ -244,31 +236,6 @@ def _format_signed_for_filename(value: float) -> str:
     if value < 0:
         return f"neg{abs(value):g}"
     return f"{value:g}"
-
-
-def plot_filtered_wideband(
-    raw_uV: np.ndarray,
-    sample_rate_hz: float,
-    channel_name: str,
-    folder: Path,
-    band_hz: tuple[float, float] | None,
-    amplitude_uV: tuple[float, float] | None,
-    max_points: int,
-    time_window: tuple[float, float] | None = None,
-    stim_channel_name: str | None = None,
-) -> tuple[plt.Figure, dict[str, float | int | str]]:
-    """Plot one bandpass-filtered channel inside a signed amplitude window."""
-    fig, summaries = plot_filtered_channels(
-        channel_data=[(channel_name, raw_uV)],
-        sample_rate_hz=sample_rate_hz,
-        folder=folder,
-        band_hz=band_hz,
-        amplitude_uV=amplitude_uV,
-        max_points=max_points,
-        time_window=time_window,
-        stim_channel_name=stim_channel_name,
-    )
-    return fig, summaries[0]
 
 
 def plot_filtered_channels(

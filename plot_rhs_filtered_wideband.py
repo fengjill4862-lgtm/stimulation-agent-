@@ -24,8 +24,8 @@ import matplotlib.pyplot as plt
 
 from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
-    envelope_for_display,
     sample_slice_for_time_window,
+    time_window_label,
 )
 
 
@@ -180,6 +180,45 @@ def default_filtered_output_path(
         high_label = _format_signed_for_filename(amplitude_uV[1])
         amp_label = f"{low_label}-to-{high_label}uV"
     return folder / f"filtered_wideband_{safe_channel}_{band_label}_{amp_label}.png"
+
+
+def default_response_output_path(
+    folder: Path,
+    channel_label: str,
+    band_hz: tuple[float, float] | None,
+    amplitude_uV: tuple[float, float] | None,
+    time_window: tuple[float, float] | None,
+) -> Path:
+    """Name the Function 4 response-only PNG, without stimulation metadata.
+
+    Function 4 plots recorded responses only, so unlike
+    `default_filtered_output_path` this name carries a time-window label and no
+    stim information. Kept here rather than in the UI layer so the notebook and
+    the batch runner cannot drift apart on filenames.
+    """
+    safe_channel = _response_safe_label(channel_label)
+    band_label = format_bandpass_filename_label(band_hz).replace(".", "p")
+    if amplitude_uV is None:
+        amp_label = "allAmp"
+    else:
+        amp_label = (
+            f"{_response_signed_number(amplitude_uV[0])}-to-"
+            f"{_response_signed_number(amplitude_uV[1])}uV"
+        )
+    return folder / (
+        f"recorded_response_{safe_channel}_{band_label}_{amp_label}_"
+        f"{time_window_label(time_window)}.png"
+    )
+
+
+def _response_safe_label(text: str) -> str:
+    safe = text.strip().replace(" ", "_").replace("/", "_").replace(":", "_")
+    return safe.replace(",", "_").replace("-", "").replace("__", "_") or "channels"
+
+
+def _response_signed_number(value: float) -> str:
+    formatted = f"{abs(value):g}".replace(".", "p")
+    return f"neg{formatted}" if value < 0 else formatted
 
 
 def format_bandpass_filename_label(band_hz: tuple[float, float] | None) -> str:

@@ -1,7 +1,7 @@
 # Stimulation Analysis Agent Handoff
 
 Last reviewed: 2026-08-14  
-Workspace: `/Users/jf/SynologyDrive/Research/code/Matlab code`  
+Workspace: `/Users/jf/Claude/Matlab code`  
 Git snapshot at handoff: `b38fb04` (`2026-07-30 Auto backup: 2026-07-30 11:34:08 PDT`)  
 Worktree status before creating this handoff: clean
 
@@ -26,7 +26,7 @@ not replace it with this file.
 
 Main notebook:
 
-`/Users/jf/SynologyDrive/Research/code/Matlab code/Plot_All_Channel_Data_Wideband.ipynb`
+`/Users/jf/Claude/Matlab code/Plot_All_Channel_Data_Wideband.ipynb`
 
 Open it in VS Code as a Jupyter notebook, select the Python 3 kernel, and run the
 launcher cell below the desired Markdown section. The launcher source is hidden
@@ -569,5 +569,5 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
 A useful opening prompt in the new account is:
 
 ```text
-Read /Users/jf/SynologyDrive/Research/code/Matlab code/STIM_AGENT_HANDOFF.md and continue the Intan RHS stimulation-analysis workflow from that exact state. Inspect git status and the active helper files before editing.
+Read /Users/jf/Claude/Matlab code/STIM_AGENT_HANDOFF.md and continue the Intan RHS stimulation-analysis workflow from that exact state. Inspect git status and the active helper files before editing.
 ```

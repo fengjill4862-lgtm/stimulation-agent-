@@ -126,10 +126,9 @@ def show_function2_bandpass_filtered(namespace: MutableMapping[str, object] | No
         sample_rate_hz = read.sample_rate_hz
         loaded = read.loaded
 
-        # Function 2 deliberately searches only the selected channels; it does not
-        # fall back to scanning every recorded channel the way Functions 3 and 5 do.
+        # Searches selected channels first, then every other recorded channel.
         stim_channel_info = resolve_stim_channel(
-            data_folder, channels, read.stim_channel_data, sample_rate_hz, fallback=False
+            data_folder, channels, read.stim_channel_data, sample_rate_hz
         )
         stim_channel_name = stim_channel_info[0] if stim_channel_info is not None else None
 

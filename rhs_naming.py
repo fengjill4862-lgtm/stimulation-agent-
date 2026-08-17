@@ -36,6 +36,7 @@ import re
 
 __all__ = [
     "channel_label",
+    "band_token",
     "channel_label_collapsed",
     "ms_label",
     "ms_number",
@@ -83,6 +84,15 @@ def safe_token(text: str) -> str:
 # -----------------------------------------------------------------------------
 # Number formatters
 # -----------------------------------------------------------------------------
+def band_token(text: str) -> str:
+    """Sanitize a band label, keeping the range dash but mapping decimals to p.
+
+    ``"delta_0.5-4Hz"`` -> ``"delta_0p5-4Hz"``. The dash separates the two
+    frequencies and must survive, unlike the dash in a channel name.
+    """
+    return safe_token(text).replace(".", "p")
+
+
 def number_token(value: float) -> str:
     """Format a number for a filename: "-" becomes neg, "." becomes p."""
     return f"{value:g}".replace("-", "neg").replace(".", "p")

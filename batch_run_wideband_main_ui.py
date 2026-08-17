@@ -225,6 +225,10 @@ def run_raw_plot(
     output_path = default_output_path(folder, label)
     if skip_existing and output_path.exists():
         return output_path
+    # Matches Function 1: identify stim even when it is not a displayed channel.
+    stim_channel_info = resolve_stim_channel(
+        folder, data.channels, channel_data, data.sample_rate_hz
+    )
     fig = plot_raw_channels_with_stim_pulse(
         channel_data=channel_data,
         sample_rate_hz=data.sample_rate_hz,
@@ -233,6 +237,8 @@ def run_raw_plot(
         max_points=max_points,
         pulse_number=pulse_number,
         time_window=time_window,
+        stim_channel_name=None if stim_channel_info is None else stim_channel_info[0],
+        stim_uA=None if stim_channel_info is None else stim_channel_info[1],
     )
     atomic_write_figure(fig, output_path, dpi=dpi)
     plt.close(fig)
@@ -280,13 +286,12 @@ def run_filtered_plot(
     skip_existing: bool,
 ) -> Path:
     raw_channel_data = list(zip(data.channels, data.raw_uV))
-    # Matches Function 2: search only the selected channels, no folder-wide scan.
+    # Matches Function 2: selected channels first, then the rest of the folder.
     stim_channel_info = resolve_stim_channel(
         folder,
         data.channels,
         list(zip(data.channels, data.raw_uV, data.stim_uA)),
         data.sample_rate_hz,
-        fallback=False,
     )
     stim_channel_name = None if stim_channel_info is None else stim_channel_info[0]
     label = channel_selection_label(data.channels)

@@ -28,7 +28,7 @@ from plot_rhs_raw_wideband_with_stim_legend import (
     find_pulse_segments,
 )
 from plot_rhs_stim_triggered_events import build_stim_triggered_events
-from rhs_naming import number_token, safe_token
+from rhs_naming import band_token, channel_label_collapsed, number_token, safe_token
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ def default_prepost_power_output_paths(
     step_s: float,
 ) -> tuple[Path, Path]:
     """Return PNG and CSV paths for pre/post neuromodulation power."""
-    channel_label = safe_token(channel_selection_label(channels))
+    channel_label = channel_label_collapsed(channel_selection_label(channels))
     band_label = _bands_label_for_filename(bands)
     stem = (
         f"power_prepost_{channel_label}_{band_label}_"
@@ -151,7 +151,7 @@ def default_power_output_paths(
     blank_window_ms: tuple[float, float] = (-10.0, 50.0),
 ) -> tuple[Path, Path]:
     """Return PNG and CSV paths for stim-triggered power."""
-    channel_label = safe_token(channel_selection_label(channels))
+    channel_label = channel_label_collapsed(channel_selection_label(channels))
     band_label = _bands_label_for_filename(bands)
     baseline_label = _window_label_for_filename("base", baseline_window)
     post_label = "_".join(
@@ -813,7 +813,7 @@ def _format_optional_float(value: object) -> str:
 
 def _bands_label_for_filename(bands: Sequence[PowerBand]) -> str:
     band_label = "_".join(
-        safe_token(f"{band.name}_{band.low_hz:g}-{band.high_hz:g}Hz") for band in bands
+        band_token(f"{band.name}_{band.low_hz:g}-{band.high_hz:g}Hz") for band in bands
     )
     if len(band_label) > 80:
         band_label = f"{len(bands)}bands"

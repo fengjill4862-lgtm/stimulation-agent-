@@ -124,6 +124,18 @@ def show_function1_raw_wideband(namespace: MutableMapping[str, object] | None = 
         sample_rate_hz = read.sample_rate_hz
         loaded = read.loaded
 
+        # Search the selected channels first, then every other recorded channel,
+        # so the stim channel is identified even when it is not being displayed.
+        try:
+            stim_channel_info = resolve_stim_channel(
+                data_folder, channels, channel_data, sample_rate_hz
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raw_status.value = error_html(exc)
+            return
+        stim_channel_name = None if stim_channel_info is None else stim_channel_info[0]
+        stim_uA_for_caption = None if stim_channel_info is None else stim_channel_info[1]
+
         try:
             fig = plot_raw_channels_with_stim_pulse(
                 channel_data=channel_data,
@@ -133,6 +145,8 @@ def show_function1_raw_wideband(namespace: MutableMapping[str, object] | None = 
                 max_points=max_points,
                 pulse_number=pulse_number,
                 time_window=time_window,
+                stim_channel_name=stim_channel_name,
+                stim_uA=stim_uA_for_caption,
             )
         except ValueError as exc:
             raw_status.value = error_html(exc)
@@ -151,16 +165,12 @@ def show_function1_raw_wideband(namespace: MutableMapping[str, object] | None = 
         )
         displayed_samples = display_slice.stop - display_slice.start
         time_status = "all time" if time_window is None else f"{display_bounds[0]:g}-{display_bounds[1]:g} s"
-        # Function 1 searches only the selected channels; enter `all` when the
-        # stimulation channel is not known.
-        stim_channel_info = resolve_stim_channel(
-            data_folder, channels, channel_data, sample_rate_hz, fallback=False
-        )
         if stim_channel_info is None:
-            stim_status = "no nonzero stim_data found in selected channels"
+            stim_status = "no nonzero stim_data found in any recorded channel"
         else:
-            stim_channel_name, _display_stim_uA, pulse_segments = stim_channel_info
-            stim_status = f"{len(pulse_segments)} stim pulses on {stim_channel_name} *"
+            pulse_segments = stim_channel_info[2]
+            shown = " *" if stim_channel_name in channels else " (not displayed)"
+            stim_status = f"{len(pulse_segments)} stim pulses on {stim_channel_name}{shown}"
         total_timestamp_gaps = sum(item.timestamp_gaps for item in loaded)
         raw_status.value = (
             f"Loaded {len(loaded)} RHS file(s) for {len(channels)} channel(s), "

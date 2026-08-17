@@ -729,6 +729,8 @@ def plot_raw_channels_with_stim_pulse(
     max_points: int,
     pulse_number: int,
     time_window: tuple[float, float] | None = None,
+    stim_channel_name: str | None = None,
+    stim_uA: np.ndarray | None = None,
 ) -> plt.Figure:
     """Plot one or more raw wideband channels as stacked traces."""
     if not channel_data:
@@ -758,10 +760,13 @@ def plot_raw_channels_with_stim_pulse(
     )
     fig.supylabel("raw wideband (uV)", x=0.035)
 
-    stim_channel_info = find_stim_channel_in_data(
-        channel_data, slice(0, channel_data[0][1].size)
-    )
-    stim_channel_name = stim_channel_info[0] if stim_channel_info is not None else None
+    if stim_channel_name is None:
+        # No stim channel supplied by the caller: fall back to searching the
+        # channels being displayed, which is the historical behavior.
+        stim_channel_info = find_stim_channel_in_data(
+            channel_data, slice(0, channel_data[0][1].size)
+        )
+        stim_channel_name = stim_channel_info[0] if stim_channel_info is not None else None
 
     used_envelope_any = False
     for ax, (channel_name, raw_uV, _stim_uA) in zip(axes_flat, channel_data):
@@ -804,6 +809,18 @@ def plot_raw_channels_with_stim_pulse(
                         pulse_segments,
                     )
                 break
+
+    if display_stim_channel_info is None and stim_uA is not None:
+        # The stimulation channel is not among the displayed channels, so use the
+        # trace the caller found elsewhere in the folder for the pulse caption.
+        caption_stim_uA = stim_uA[display_slice]
+        caption_segments = find_pulse_segments(caption_stim_uA)
+        if caption_segments:
+            display_stim_channel_info = (
+                stim_channel_name,
+                caption_stim_uA,
+                caption_segments,
+            )
 
     if display_stim_channel_info is not None:
         _stim_channel_name, display_stim_uA, pulse_segments = display_stim_channel_info

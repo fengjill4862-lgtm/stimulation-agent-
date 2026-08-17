@@ -640,10 +640,11 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
    Fixing it means deleting `batch_run_wideband_main_ui.event_window_label` and
    importing the shared one.
 
-0b. The batch runner also has **no stim-channel fallback**: `run_event_plot` and
-   `run_power_analysis` bail with "no nonzero stim_data" where the notebook
-   would scan the remaining recorded channels. `rhs_stim.resolve_stim_channel`
-   is the shared implementation; the batch runner simply does not call it yet.
+0b. ~~The batch runner has no stim-channel fallback.~~ **Fixed 2026-08-17.**
+   All three batch sites call `rhs_stim.resolve_stim_channel`; the filtered-plot
+   site passes `fallback=False` to keep Function 2's selected-channels-only
+   semantics. A session with stim on an unselected channel is now analyzed by
+   batch instead of being skipped.
 
 0c. Filename conventions still differ between functions: Function 5 keeps the
    dash (`A-014`) while everything else strips it (`A014`), and `.` becomes `p`

@@ -35,14 +35,13 @@ from wideband_ui_common import (
 from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
     default_output_path,
-    find_stim_channel_in_data,
     parse_time_window,
     plot_raw_channels_with_stim_pulse,
-    read_rhs_folder,
     resolve_channel_selection,
     sample_slice_for_time_window,
     time_window_label,
 )
+from rhs_stim import read_selected_channels, resolve_stim_channel
 
 DEFAULT_CHANNELS = "A-014"
 DEFAULT_TIME_WINDOW = "all"
@@ -116,20 +115,14 @@ def show_function1_raw_wideband(namespace: MutableMapping[str, object] | None = 
             return
 
         raw_status.value = f"Reading RHS files from <b>{data_folder}</b>..."
-        channel_data = []
-        sample_rate_hz = None
-        loaded = None
         try:
-            for channel in channels:
-                raw_uV, stim_uA, channel_sample_rate_hz, channel_loaded = read_rhs_folder(data_folder, channel)
-                if sample_rate_hz is not None and channel_sample_rate_hz != sample_rate_hz:
-                    raise ValueError("Selected channels have different sample rates.")
-                sample_rate_hz = channel_sample_rate_hz
-                loaded = channel_loaded
-                channel_data.append((channel, raw_uV, stim_uA))
+            read = read_selected_channels(data_folder, channels)
         except (FileNotFoundError, ValueError) as exc:
             raw_status.value = error_html(exc)
             return
+        channel_data = read.stim_channel_data
+        sample_rate_hz = read.sample_rate_hz
+        loaded = read.loaded
 
         try:
             fig = plot_raw_channels_with_stim_pulse(
@@ -158,7 +151,11 @@ def show_function1_raw_wideband(namespace: MutableMapping[str, object] | None = 
         )
         displayed_samples = display_slice.stop - display_slice.start
         time_status = "all time" if time_window is None else f"{display_bounds[0]:g}-{display_bounds[1]:g} s"
-        stim_channel_info = find_stim_channel_in_data(channel_data, slice(0, first_raw_uV.size))
+        # Function 1 searches only the selected channels; enter `all` when the
+        # stimulation channel is not known.
+        stim_channel_info = resolve_stim_channel(
+            data_folder, channels, channel_data, sample_rate_hz, fallback=False
+        )
         if stim_channel_info is None:
             stim_status = "no nonzero stim_data found in selected channels"
         else:

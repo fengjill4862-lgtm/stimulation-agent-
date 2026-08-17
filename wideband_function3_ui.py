@@ -24,11 +24,9 @@ from IPython.display import display
 
 from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
-    find_stim_channel_in_data,
-    read_rhs_amplifier_channel_names,
-    read_rhs_folder,
     resolve_channel_selection,
 )
+from rhs_stim import NO_STIM_IN_FOLDER, read_selected_channels, resolve_stim_channel
 from plot_rhs_filtered_wideband import (
     format_bandpass_status,
     parse_amplitude_range,
@@ -204,60 +202,22 @@ def show_function3_stim_triggered_events(
             return
 
         event_status.value = f"Reading RHS files from <b>{data_folder}</b>..."
-        raw_channel_data = []
-        stim_channel_data = []
-        sample_rate_hz = None
-        loaded = None
         try:
-            for channel in channels:
-                raw_uV, stim_uA, channel_sample_rate_hz, channel_loaded = read_rhs_folder(
-                    data_folder, channel
-                )
-                if sample_rate_hz is not None and channel_sample_rate_hz != sample_rate_hz:
-                    raise ValueError("Selected channels have different sample rates.")
-                sample_rate_hz = channel_sample_rate_hz
-                loaded = channel_loaded
-                raw_channel_data.append((channel, raw_uV))
-                stim_channel_data.append((channel, raw_uV, stim_uA))
+            read = read_selected_channels(data_folder, channels)
+            # Searches selected channels first, then every other recorded
+            # channel, so response channels can be shown without selecting stim.
+            stim_channel_info = resolve_stim_channel(
+                data_folder, channels, read.stim_channel_data, read.sample_rate_hz
+            )
         except (FileNotFoundError, ValueError) as exc:
             event_status.value = f"<b style='color:#b00020'>{exc}</b>"
             return
-
-        full_session_slice = slice(0, stim_channel_data[0][1].size)
-        stim_channel_info = find_stim_channel_in_data(
-            stim_channel_data, full_session_slice
-        )
-        if stim_channel_info is None:
-            try:
-                available_channels = read_rhs_amplifier_channel_names(data_folder)
-                for candidate_channel in available_channels:
-                    if candidate_channel in channels:
-                        continue
-                    (
-                        candidate_raw_uV,
-                        candidate_stim_uA,
-                        candidate_sample_rate_hz,
-                        _candidate_loaded,
-                    ) = read_rhs_folder(data_folder, candidate_channel)
-                    if candidate_sample_rate_hz != sample_rate_hz:
-                        raise ValueError(
-                            "Stim channel has a different sample rate from selected display channels."
-                        )
-                    candidate_info = find_stim_channel_in_data(
-                        [(candidate_channel, candidate_raw_uV, candidate_stim_uA)],
-                        slice(0, candidate_stim_uA.size),
-                    )
-                    if candidate_info is not None:
-                        stim_channel_info = candidate_info
-                        break
-            except (FileNotFoundError, ValueError) as exc:
-                event_status.value = f"<b style='color:#b00020'>{exc}</b>"
-                return
+        raw_channel_data = read.raw_channel_data
+        sample_rate_hz = read.sample_rate_hz
+        loaded = read.loaded
 
         if stim_channel_info is None:
-            event_status.value = (
-                "<b style='color:#b00020'>No nonzero stim_data found in any recorded channel in this folder.</b>"
-            )
+            event_status.value = f"<b style='color:#b00020'>{NO_STIM_IN_FOLDER}</b>"
             return
         stim_detection_channel, stim_uA_for_events, _pulse_segments = stim_channel_info
 

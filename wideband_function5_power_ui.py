@@ -29,12 +29,8 @@ from plot_rhs_power_analysis import (
     parse_time_window_ms,
     power_rows_to_csv,
 )
-from plot_rhs_raw_wideband_with_stim_legend import (
-    find_stim_channel_in_data,
-    read_rhs_amplifier_channel_names,
-    read_rhs_folder,
-    resolve_channel_selection,
-)
+from plot_rhs_raw_wideband_with_stim_legend import resolve_channel_selection
+from rhs_stim import read_selected_channels, resolve_stim_channel
 
 
 def show_function5_power_analysis(
@@ -350,46 +346,16 @@ def show_function5_power_analysis(
 
 
 def _read_power_inputs(folder: Path, channels: list[str]):
-    raw_channel_data = []
-    stim_channel_data = []
-    sample_rate_hz = None
-    loaded = None
-    for channel in channels:
-        raw_uV, stim_uA, channel_sample_rate_hz, channel_loaded = read_rhs_folder(
-            folder, channel
-        )
-        if sample_rate_hz is not None and channel_sample_rate_hz != sample_rate_hz:
-            raise ValueError("Selected channels have different sample rates.")
-        sample_rate_hz = channel_sample_rate_hz
-        loaded = channel_loaded
-        raw_channel_data.append((channel, raw_uV))
-        stim_channel_data.append((channel, raw_uV, stim_uA))
+    """Read the selected channels and locate stim, scanning unselected channels.
 
-    stim_channel_info = find_stim_channel_in_data(
-        stim_channel_data,
-        slice(0, stim_channel_data[0][1].size),
+    Power can therefore be computed for non-stimulation channels alone while
+    still using the correct stimulation timing.
+    """
+    read = read_selected_channels(folder, channels)
+    stim_channel_info = resolve_stim_channel(
+        folder, channels, read.stim_channel_data, read.sample_rate_hz
     )
-    if stim_channel_info is None:
-        available_channels = read_rhs_amplifier_channel_names(folder)
-        for candidate_channel in available_channels:
-            if candidate_channel in channels:
-                continue
-            candidate_raw_uV, candidate_stim_uA, candidate_sample_rate_hz, _loaded = read_rhs_folder(
-                folder, candidate_channel
-            )
-            if candidate_sample_rate_hz != sample_rate_hz:
-                raise ValueError(
-                    "Stim channel has a different sample rate from selected display channels."
-                )
-            candidate_info = find_stim_channel_in_data(
-                [(candidate_channel, candidate_raw_uV, candidate_stim_uA)],
-                slice(0, candidate_stim_uA.size),
-            )
-            if candidate_info is not None:
-                stim_channel_info = candidate_info
-                break
-
-    return raw_channel_data, stim_channel_info, sample_rate_hz, loaded
+    return read.raw_channel_data, stim_channel_info, read.sample_rate_hz, read.loaded
 
 
 def _folder_path_from_text(value: str) -> Path:

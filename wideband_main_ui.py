@@ -35,6 +35,7 @@ _RELOAD_CHAIN = (
     "plot_rhs_stim_triggered_events",
     "plot_rhs_power_analysis",
     "rename_rhs_folders_by_stim_waveform",
+    "rhs_stim",
     "wideband_ui_common",
 )
 

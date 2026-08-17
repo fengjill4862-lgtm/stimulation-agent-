@@ -37,12 +37,11 @@ from wideband_ui_common import (
 
 from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
-    find_stim_channel_in_data,
     parse_time_window,
-    read_rhs_folder,
     resolve_channel_selection,
     time_window_label,
 )
+from rhs_stim import read_selected_channels, resolve_stim_channel
 from plot_rhs_filtered_wideband import (
     default_filtered_output_path,
     format_bandpass_status,
@@ -118,27 +117,19 @@ def show_function2_bandpass_filtered(namespace: MutableMapping[str, object] | No
             return
 
         filter_status.value = f"Reading RHS files and {format_bandpass_status(band_hz)}..."
-        channel_data = []
-        stim_channel_data = []
-        sample_rate_hz = None
-        loaded = None
         try:
-            for channel in channels:
-                raw_uV, stim_uA, channel_sample_rate_hz, channel_loaded = read_rhs_folder(data_folder, channel)
-                if sample_rate_hz is not None and channel_sample_rate_hz != sample_rate_hz:
-                    raise ValueError("Selected channels have different sample rates.")
-                sample_rate_hz = channel_sample_rate_hz
-                loaded = channel_loaded
-                channel_data.append((channel, raw_uV))
-                stim_channel_data.append((channel, raw_uV, stim_uA))
+            read = read_selected_channels(data_folder, channels)
         except (FileNotFoundError, ValueError) as exc:
             filter_status.value = error_html(exc)
             return
+        channel_data = read.raw_channel_data
+        sample_rate_hz = read.sample_rate_hz
+        loaded = read.loaded
 
         # Function 2 deliberately searches only the selected channels; it does not
         # fall back to scanning every recorded channel the way Functions 3 and 5 do.
-        stim_channel_info = find_stim_channel_in_data(
-            stim_channel_data, slice(0, stim_channel_data[0][1].size)
+        stim_channel_info = resolve_stim_channel(
+            data_folder, channels, read.stim_channel_data, sample_rate_hz, fallback=False
         )
         stim_channel_name = stim_channel_info[0] if stim_channel_info is not None else None
 

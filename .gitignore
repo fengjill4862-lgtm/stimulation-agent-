@@ -23,8 +23,6 @@ __pycache__/
 *.npz
 
 # Generated analysis outputs
-intan_A014_batch_analysis/
-intan_A014_highres_stim_analysis/
 20260617 stimulation Pt/
 analysis_outputs/
 *.png

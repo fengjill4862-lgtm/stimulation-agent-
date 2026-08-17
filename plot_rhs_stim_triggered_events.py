@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import os
 import tempfile
 from collections.abc import Sequence
@@ -509,3 +511,66 @@ def _format_signed_number(value: float) -> str:
     if value < 0:
         return f"neg{_format_number(abs(value))}"
     return _format_number(value)
+
+
+# -----------------------------------------------------------------------------
+# Event window parsing and filename labels.
+#
+# These lived in wideband_function3_ui.py, where the batch runner could not
+# reach them -- which is why batch_run_wideband_main_ui.py grew its own
+# event_window_label() that disagrees with this one. For pre=100, post=(0,500)
+# this returns "pre100ms_post500ms" while the batch copy returns
+# "pre100ms_post0to500ms". Reconciling them renames batch output files, so it is
+# deliberately left as a follow-up rather than folded into this refactor.
+# -----------------------------------------------------------------------------
+
+def parse_pre_time_ms(value: float) -> float:
+    pre_ms = float(value)
+    if pre_ms < 0:
+        raise ValueError("Pre time (ms) must be 0 or greater.")
+    return pre_ms
+
+
+def parse_post_time_ms(value: str) -> tuple[float, float | None]:
+    cleaned = value.strip().lower().replace("ms", "")
+    cleaned = re.sub(r"\s+", "", cleaned)
+    if cleaned in {"", "all", "end"}:
+        return 0.0, None
+
+    parts = cleaned.split("-", maxsplit=1)
+    try:
+        if len(parts) == 1:
+            stop_ms = float(parts[0])
+            if stop_ms <= 0:
+                raise ValueError
+            return 0.0, stop_ms
+
+        start_ms = float(parts[0])
+        stop_ms = float(parts[1])
+        if start_ms < 0 or stop_ms <= start_ms:
+            raise ValueError
+        return start_ms, stop_ms
+    except ValueError as exc:
+        raise ValueError(
+            "Post time (ms) must be a positive value like 500, or a range like 20-300."
+        ) from exc
+
+
+def event_window_label(pre_time_ms: float, post_window_ms: tuple[float, float | None]) -> str:
+    pre_label = _ms_label(pre_time_ms)
+    post_start_ms, post_stop_ms = post_window_ms
+    if post_stop_ms is None:
+        post_label = f"{_ms_number(post_start_ms)}toEnd"
+    elif post_start_ms > 0:
+        post_label = f"{_ms_number(post_start_ms)}to{_ms_label(post_stop_ms)}"
+    else:
+        post_label = _ms_label(post_stop_ms)
+    return f"pre{pre_label}_post{post_label}"
+
+
+def _ms_label(value: float) -> str:
+    return f"{_ms_number(value)}ms"
+
+
+def _ms_number(value: float) -> str:
+    return f"{value:g}".replace(".", "p")

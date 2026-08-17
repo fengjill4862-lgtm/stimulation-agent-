@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 from io import BytesIO
 from pathlib import Path
@@ -34,8 +33,11 @@ from plot_rhs_filtered_wideband import (
 )
 from plot_rhs_stim_triggered_events import (
     build_stim_triggered_events,
+    event_window_label,
     default_stim_events_grid_output_path,
     filter_channel_data,
+    parse_post_time_ms,
+    parse_pre_time_ms,
     plot_stim_triggered_events_grid,
 )
 
@@ -177,8 +179,8 @@ def show_function3_stim_triggered_events(
             channels = resolve_channel_selection(event_channel_text.value, data_folder)
             band_hz = parse_frequency_range(event_bandpass_text.value)
             amplitude_uV = parse_amplitude_range(event_amplitude_text.value)
-            pre_time_ms = _parse_pre_time_ms(event_pre_time_float.value)
-            post_window_ms = _parse_post_time_ms(event_post_time_text.value)
+            pre_time_ms = parse_pre_time_ms(event_pre_time_float.value)
+            post_window_ms = parse_post_time_ms(event_post_time_text.value)
         except ValueError as exc:
             event_status.value = f"<b style='color:#b00020'>{exc}</b>"
             return
@@ -188,7 +190,7 @@ def show_function3_stim_triggered_events(
             post_window_ms[0] / 1.0e3,
             None if post_window_ms[1] is None else post_window_ms[1] / 1.0e3,
         )
-        window_label = _event_window_label(pre_time_ms, post_window_ms)
+        window_label = event_window_label(pre_time_ms, post_window_ms)
 
         if not data_folder.exists():
             event_status.value = (
@@ -371,55 +373,3 @@ def _folder_path_from_text(value: str) -> Path:
     cleaned = value.strip().strip('"').strip("'")
     cleaned = cleaned.replace("\r", "").replace("\n", "")
     return Path(cleaned).expanduser().resolve()
-
-
-def _parse_pre_time_ms(value: float) -> float:
-    pre_ms = float(value)
-    if pre_ms < 0:
-        raise ValueError("Pre time (ms) must be 0 or greater.")
-    return pre_ms
-
-
-def _parse_post_time_ms(value: str) -> tuple[float, float | None]:
-    cleaned = value.strip().lower().replace("ms", "")
-    cleaned = re.sub(r"\s+", "", cleaned)
-    if cleaned in {"", "all", "end"}:
-        return 0.0, None
-
-    parts = cleaned.split("-", maxsplit=1)
-    try:
-        if len(parts) == 1:
-            stop_ms = float(parts[0])
-            if stop_ms <= 0:
-                raise ValueError
-            return 0.0, stop_ms
-
-        start_ms = float(parts[0])
-        stop_ms = float(parts[1])
-        if start_ms < 0 or stop_ms <= start_ms:
-            raise ValueError
-        return start_ms, stop_ms
-    except ValueError as exc:
-        raise ValueError(
-            "Post time (ms) must be a positive value like 500, or a range like 20-300."
-        ) from exc
-
-
-def _event_window_label(pre_time_ms: float, post_window_ms: tuple[float, float | None]) -> str:
-    pre_label = _ms_label(pre_time_ms)
-    post_start_ms, post_stop_ms = post_window_ms
-    if post_stop_ms is None:
-        post_label = f"{_ms_number(post_start_ms)}toEnd"
-    elif post_start_ms > 0:
-        post_label = f"{_ms_number(post_start_ms)}to{_ms_label(post_stop_ms)}"
-    else:
-        post_label = _ms_label(post_stop_ms)
-    return f"pre{pre_label}_post{post_label}"
-
-
-def _ms_label(value: float) -> str:
-    return f"{_ms_number(value)}ms"
-
-
-def _ms_number(value: float) -> str:
-    return f"{value:g}".replace(".", "p")

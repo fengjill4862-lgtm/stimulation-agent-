@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 
 from plot_rhs_filtered_wideband import (
     default_filtered_output_path,
+    default_response_output_path,
     format_bandpass_filename_label,
     parse_amplitude_range,
     parse_frequency_range,
@@ -219,45 +220,6 @@ def _number_label(value: float) -> str:
     return f"{value:g}".replace("-", "neg").replace(".", "p")
 
 
-def response_output_path(
-    folder: Path,
-    channel_label: str,
-    band_hz: tuple[float, float] | None,
-    amplitude_uV: tuple[float, float] | None,
-    time_window: tuple[float, float] | None,
-) -> Path:
-    """Mirror Function 4's response-only PNG filename."""
-    safe_channel = _response_safe_label(channel_label)
-    band_label = format_bandpass_filename_label(band_hz).replace(".", "p")
-    if amplitude_uV is None:
-        amp_label = "allAmp"
-    else:
-        amp_label = (
-            f"{_response_signed_number(amplitude_uV[0])}-to-"
-            f"{_response_signed_number(amplitude_uV[1])}uV"
-        )
-    return (
-        folder
-        / f"recorded_response_{safe_channel}_{band_label}_{amp_label}_"
-        f"{time_window_label(time_window)}.png"
-    )
-
-
-def _response_safe_label(text: str) -> str:
-    safe = text.strip().replace(" ", "_").replace("/", "_").replace(":", "_")
-    return safe.replace(",", "_").replace("-", "").replace("__", "_") or "channels"
-
-
-def _response_number(value: float) -> str:
-    return f"{value:g}".replace("-", "neg").replace(".", "p")
-
-
-def _response_signed_number(value: float) -> str:
-    if value < 0:
-        return f"neg{_response_number(abs(value))}"
-    return _response_number(value)
-
-
 def run_raw_plot(
     folder: Path,
     data: RhsFolderData,
@@ -300,7 +262,7 @@ def run_response_plot(
 ) -> Path:
     raw_channel_data = list(zip(data.channels, data.raw_uV))
     label = channel_selection_label(data.channels)
-    output_path = response_output_path(folder, label, band_hz, amplitude_uV, time_window)
+    output_path = default_response_output_path(folder, label, band_hz, amplitude_uV, time_window)
     if skip_existing and output_path.exists():
         return output_path
     fig, _summaries = plot_filtered_channels(

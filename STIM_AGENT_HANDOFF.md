@@ -97,8 +97,15 @@ Three things worth knowing:
 
 - Loading a **new data file needs no reload** -- that is just pasting a path into
   the widget. Reload is only for code edits.
-- Adding a new helper module means adding it to `_RELOAD_CHAIN` in the right
-  position, or edits to it will not take effect.
+- Adding a new helper module means adding it to `_RELOAD_CHAIN` **in the right
+  position**. Getting this wrong is not a silent staleness bug: reloading a
+  module re-executes its `from X import y` lines, so if `X` has not been
+  reloaded yet, any name newly added to `X` raises
+  `ImportError: cannot import name ...` from inside the launcher. This happened
+  on 2026-08-17 when `rhs_naming` was appended after the `plot_rhs_*` modules
+  that import it. Run `python3 wideband_main_ui.py` after any change to the
+  chain -- `check_reload_chain()` parses the imports and reports any module
+  listed before something it depends on, or missing from the chain entirely.
 - `importlib.reload` cannot fix objects already built from old class
   definitions. If behavior ever looks impossible, restart the kernel; that
   remains the ground truth.

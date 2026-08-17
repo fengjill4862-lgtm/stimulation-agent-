@@ -24,19 +24,22 @@ remains the ground truth if behavior ever looks impossible.
 from __future__ import annotations
 
 import importlib
+import pathlib
 import sys
 from collections.abc import MutableMapping
 
 # Leaves first. Every entry is reloaded, in this order, before the UI module for
 # the function being launched.
 _RELOAD_CHAIN = (
+    # Pure leaves: standard library only.
+    "rhs_naming",
+    "rhs_files",
+    # Depend on the leaves above, and on each other in this order.
     "plot_rhs_raw_wideband_with_stim_legend",
     "plot_rhs_filtered_wideband",
     "plot_rhs_stim_triggered_events",
     "plot_rhs_power_analysis",
     "rename_rhs_folders_by_stim_waveform",
-    "rhs_files",
-    "rhs_naming",
     "rhs_stim",
     "wideband_ui_common",
 )
@@ -106,3 +109,46 @@ __all__ = [
     "show_function4_recorded_response_only",
     "show_function5_power_analysis",
 ]
+
+
+def check_reload_chain() -> list[str]:
+    """Verify _RELOAD_CHAIN is ordered leaves-first. Returns a list of problems.
+
+    A module must appear after every project module it imports, or reloading it
+    re-executes `from X import y` against a stale cached X and raises ImportError
+    for anything newly added to X. Run this after adding or reordering modules:
+
+        python3 wideband_main_ui.py
+    """
+    import re
+
+    position = {name: index for index, name in enumerate(_RELOAD_CHAIN)}
+    problems: list[str] = []
+    for name, index in position.items():
+        source = pathlib.Path(f"{name}.py").read_text()
+        for dependency in re.findall(r"^from ([a-z_][a-z0-9_]*) import", source, flags=re.M):
+            if dependency in position and position[dependency] > index:
+                problems.append(
+                    f"{name} (position {index}) imports {dependency} "
+                    f"(position {position[dependency]}) -- dependency must come first"
+                )
+    for function_name, module_name in _LAUNCHERS.items():
+        source = pathlib.Path(f"{module_name}.py").read_text()
+        for dependency in re.findall(r"^from ([a-z_][a-z0-9_]*) import", source, flags=re.M):
+            if dependency not in position and pathlib.Path(f"{dependency}.py").exists():
+                problems.append(
+                    f"{module_name} imports {dependency}, which is missing from _RELOAD_CHAIN"
+                )
+    return problems
+
+
+if __name__ == "__main__":
+    import pathlib
+
+    issues = check_reload_chain()
+    if issues:
+        print("_RELOAD_CHAIN problems:")
+        for issue in issues:
+            print(f"  {issue}")
+        raise SystemExit(1)
+    print(f"_RELOAD_CHAIN is correctly ordered ({len(_RELOAD_CHAIN)} modules).")

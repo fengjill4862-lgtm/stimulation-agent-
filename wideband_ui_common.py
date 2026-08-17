@@ -141,20 +141,9 @@ def show_preview_image(output: "widgets.Output", png: bytes, caption: str | None
 # -----------------------------------------------------------------------------
 # Saving
 # -----------------------------------------------------------------------------
-def atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Write bytes via a hidden temp file and one atomic replace."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f".{path.stem}.tmp{path.suffix}")
-    temp_path.write_bytes(data)
-    os.replace(temp_path, path)
-
-
-def atomic_write_text(path: Path, text: str) -> None:
-    """Write text via a hidden temp file and one atomic replace."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f".{path.stem}.tmp{path.suffix}")
-    temp_path.write_text(text)
-    os.replace(temp_path, path)
+# Re-exported so UI modules have one import site; the implementation is in
+# rhs_files, which the headless batch runner also uses.
+from rhs_files import atomic_write_all, atomic_write_bytes, atomic_write_text  # noqa: E402,F401
 
 
 # -----------------------------------------------------------------------------
@@ -252,6 +241,7 @@ __all__ = [
     "NO_PREVIEW_TARGET",
     "PREVIEW_DPI",
     "amplitude_text",
+    "atomic_write_all",
     "atomic_write_bytes",
     "atomic_write_text",
     "bandpass_text",

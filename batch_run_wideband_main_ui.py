@@ -50,7 +50,6 @@ from plot_rhs_raw_wideband_with_stim_legend import (
     _read_header,
     channel_selection_label,
     default_output_path,
-    find_stim_channel_in_data,
     plot_raw_channels_with_stim_pulse,
     resolve_channel_selection,
     time_window_label,
@@ -62,6 +61,8 @@ from plot_rhs_stim_triggered_events import (
     plot_stim_triggered_events_grid,
 )
 from rhs_naming import number_token
+from rhs_files import atomic_write_figure, atomic_write_text
+from rhs_stim import resolve_stim_channel
 
 
 @dataclass(frozen=True)
@@ -242,7 +243,7 @@ def run_raw_plot(
         pulse_number=pulse_number,
         time_window=time_window,
     )
-    fig.savefig(output_path, dpi=dpi)
+    atomic_write_figure(fig, output_path, dpi=dpi)
     plt.close(fig)
     return output_path
 
@@ -272,7 +273,7 @@ def run_response_plot(
         time_window=time_window,
         stim_channel_name=None,
     )
-    fig.savefig(output_path, dpi=dpi)
+    atomic_write_figure(fig, output_path, dpi=dpi)
     plt.close(fig)
     return output_path
 
@@ -288,9 +289,13 @@ def run_filtered_plot(
     skip_existing: bool,
 ) -> Path:
     raw_channel_data = list(zip(data.channels, data.raw_uV))
-    stim_channel_info = find_stim_channel_in_data(
+    # Matches Function 2: search only the selected channels, no folder-wide scan.
+    stim_channel_info = resolve_stim_channel(
+        folder,
+        data.channels,
         list(zip(data.channels, data.raw_uV, data.stim_uA)),
-        slice(0, data.raw_uV[0].size),
+        data.sample_rate_hz,
+        fallback=False,
     )
     stim_channel_name = None if stim_channel_info is None else stim_channel_info[0]
     label = channel_selection_label(data.channels)
@@ -309,7 +314,7 @@ def run_filtered_plot(
         time_window=time_window,
         stim_channel_name=stim_channel_name,
     )
-    fig.savefig(output_path, dpi=dpi)
+    atomic_write_figure(fig, output_path, dpi=dpi)
     plt.close(fig)
     return output_path
 
@@ -330,9 +335,16 @@ def run_event_plot(
 ) -> tuple[list[Path], int, str | None]:
     raw_channel_data = list(zip(data.channels, data.raw_uV))
     stim_channel_data = list(zip(data.channels, data.raw_uV, data.stim_uA))
-    stim_channel_info = find_stim_channel_in_data(stim_channel_data, slice(0, data.raw_uV[0].size))
+    # Matches Function 3: selected channels first, then every other recorded
+    # channel, so response channels can be plotted without selecting stim.
+    try:
+        stim_channel_info = resolve_stim_channel(
+            folder, data.channels, stim_channel_data, data.sample_rate_hz
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        return [], 0, str(exc)
     if stim_channel_info is None:
-        return [], 0, "no nonzero stim_data"
+        return [], 0, "no nonzero stim_data in any recorded channel"
 
     stim_channel_name, stim_uA_for_events, _pulse_segments = stim_channel_info
     events = build_stim_triggered_events(
@@ -398,7 +410,7 @@ def run_event_plot(
                 None if post_window_ms[1] is None else post_window_ms[1] / 1000.0,
             ),
         )
-        fig.savefig(output_path, dpi=dpi)
+        atomic_write_figure(fig, output_path, dpi=dpi)
         plt.close(fig)
         output_paths.append(output_path)
     return output_paths, len(events), stim_channel_name
@@ -422,12 +434,16 @@ def run_power_analysis(
 ) -> tuple[Path | None, Path | None, int, str | None]:
     raw_channel_data = list(zip(data.channels, data.raw_uV))
     stim_channel_data = list(zip(data.channels, data.raw_uV, data.stim_uA))
-    stim_channel_info = find_stim_channel_in_data(
-        stim_channel_data,
-        slice(0, data.raw_uV[0].size),
-    )
+    # Matches Function 5: power can be computed for non-stim channels alone
+    # while still using the correct stimulation timing.
+    try:
+        stim_channel_info = resolve_stim_channel(
+            folder, data.channels, stim_channel_data, data.sample_rate_hz
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        return None, None, 0, str(exc)
     if stim_channel_info is None:
-        return None, None, 0, "no nonzero stim_data"
+        return None, None, 0, "no nonzero stim_data in any recorded channel"
 
     stim_channel_name, stim_uA_for_events, _pulse_segments = stim_channel_info
     if mode == "prepost":
@@ -461,9 +477,9 @@ def run_power_analysis(
         plt.close(result.figure)
         return result.png_path, result.csv_path, result.event_count, result.stim_channel_name
 
-    result.figure.savefig(result.png_path, dpi=dpi)
+    atomic_write_figure(result.figure, result.png_path, dpi=dpi)
     plt.close(result.figure)
-    result.csv_path.write_text(power_rows_to_csv(result.rows))
+    atomic_write_text(result.csv_path, power_rows_to_csv(result.rows))
     return result.png_path, result.csv_path, result.event_count, result.stim_channel_name
 
 

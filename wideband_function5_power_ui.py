@@ -31,6 +31,7 @@ from plot_rhs_power_analysis import (
 )
 from plot_rhs_raw_wideband_with_stim_legend import resolve_channel_selection
 from rhs_stim import read_selected_channels, resolve_stim_channel
+from rhs_files import atomic_write_all
 
 
 def show_function5_power_analysis(
@@ -329,13 +330,8 @@ def show_function5_power_analysis(
 
         assert isinstance(png_path, Path)
         assert isinstance(csv_path, Path)
-        png_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_png = png_path.with_name(f".{png_path.stem}.tmp{png_path.suffix}")
-        temp_csv = csv_path.with_name(f".{csv_path.stem}.tmp{csv_path.suffix}")
-        temp_png.write_bytes(preview_png)
-        temp_csv.write_text(str(csv_text))
-        os.replace(temp_png, png_path)
-        os.replace(temp_csv, csv_path)
+        # Staged together so a failure cannot leave a new PNG beside a stale CSV.
+        atomic_write_all([(png_path, preview_png), (csv_path, str(csv_text))])
         power_target_label.value = f"<b>Saved:</b> {png_path.name} and {csv_path.name}"
         power_status.value = (
             f"Saved power PNG and CSV inside selected data folder: <b>{png_path.parent}</b>"

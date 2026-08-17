@@ -1,8 +1,9 @@
 # Stimulation Analysis Agent Handoff
 
-Last reviewed: 2026-08-14  
+Last reviewed: 2026-08-17  
 Workspace: `/Users/jf/Claude/Matlab code`  
-Git snapshot at handoff: `b38fb04` (`2026-07-30 Auto backup: 2026-07-30 11:34:08 PDT`)  
+Git snapshot at handoff: branch `refactor/extract-ui-blocks`, after the
+Functions 0/1/2/4 extraction  
 Worktree status before creating this handoff: clean
 
 ## Purpose
@@ -35,14 +36,18 @@ lives in helper `.py` files.
 
 The notebook currently contains Functions 0 through 5:
 
-| Function | UI purpose | Main implementation |
-| --- | --- | --- |
-| 0 | Preview and apply RHS folder renames from the recorded stim waveform | `rename_rhs_folders_by_stim_waveform.py` plus the Function 0 block in `wideband_main_ui.py` |
-| 1 | Plot raw wideband data for one, many, or all recorded channels | `plot_rhs_raw_wideband_with_stim_legend.py` plus `wideband_main_ui.py` |
-| 2 | Plot bandpass-filtered samples inside a signed amplitude and time window | `plot_rhs_filtered_wideband.py` plus `wideband_main_ui.py` |
-| 3 | Plot stim-triggered response events, three events per row | `plot_rhs_stim_triggered_events.py` and `wideband_function3_ui.py` |
-| 4 | Plot recorded response only, without requiring or showing stim current | `plot_rhs_filtered_wideband.py` plus the Function 4 block in `wideband_main_ui.py` |
-| 5 | Pre/post neuromodulation or stim-triggered band-power analysis | `plot_rhs_power_analysis.py` and `wideband_function5_power_ui.py` |
+| Function | UI purpose | UI module | Numerics |
+| --- | --- | --- | --- |
+| 0 | Preview and apply RHS folder renames from the recorded stim waveform | `wideband_function0_ui.py` | `rename_rhs_folders_by_stim_waveform.py` |
+| 1 | Plot raw wideband data for one, many, or all recorded channels | `wideband_function1_ui.py` | `plot_rhs_raw_wideband_with_stim_legend.py` |
+| 2 | Plot bandpass-filtered samples inside a signed amplitude and time window | `wideband_function2_ui.py` | `plot_rhs_filtered_wideband.py` |
+| 3 | Plot stim-triggered response events, three events per row | `wideband_function3_ui.py` | `plot_rhs_stim_triggered_events.py` |
+| 4 | Plot recorded response only, without requiring or showing stim current | `wideband_function4_ui.py` | `plot_rhs_filtered_wideband.py` |
+| 5 | Pre/post neuromodulation or stim-triggered band-power analysis | `wideband_function5_power_ui.py` | `plot_rhs_power_analysis.py` |
+
+Shared across the UI modules: `wideband_ui_common.py` (widget factories, preview
+rendering, atomic saves, error markup) and `rhs_stim.py` (channel reading and
+stim-channel resolution).
 
 `wideband_main_ui.py` is the notebook launcher layer. Its public functions are:
 
@@ -55,10 +60,48 @@ show_function4_recorded_response_only(globals())
 show_function5_power_analysis(globals())
 ```
 
-Functions 3 and 5 are intentionally in separate compact UI modules. Function 3
-also has an older `_BLOCK_3_SOURCE` string left in `wideband_main_ui.py`, but the
-public launcher imports and uses `wideband_function3_ui.py`; treat that helper as
-the active implementation.
+`wideband_main_ui.py` contains no function-specific code. It exists to **own
+ordered module reloading**, and that is the only reason the layer is there.
+
+Until 2026-08-17 the UI code for Functions 0, 1, 2 and 4 was stored as Python
+source escaped into single-line string literals (`_BLOCK_N_SOURCE`) and run
+through `exec()`. That is gone; each function is now a real module. A dead
+`_BLOCK_3_SOURCE` was deleted at the same time.
+
+## Layering Rule
+
+Four layers, each with one job. The third row is the one that matters most,
+because violating it is what let the batch runner drift away from the notebook.
+
+| Layer | May do | Must not do |
+| --- | --- | --- |
+| Notebook | display cells, call one launcher | hold any logic |
+| `wideband_main_ui.py` | ordered reload, dispatch | anything function-specific |
+| `wideband_functionN_ui.py` | read widget values, display results | parse, name files, branch on data |
+| `plot_rhs_*` / `rhs_*` | parse, compute, decide output paths | know that widgets exist |
+
+Function 5 is the model to copy: its output paths come back *from* the analysis
+(`result.png_path`, `result.csv_path`) rather than being computed in widget code.
+The UI asks; the helper decides.
+
+## Reloading
+
+The notebook cells call `importlib.reload(wideband_main_ui)`, which does **not**
+reload submodules. `wideband_main_ui._RELOAD_CHAIN` therefore reloads the
+dependency graph explicitly on every launch, **leaves first**. That order is
+load-bearing: reloading a module re-executes its `from X import y` lines against
+`sys.modules`, so a dependent reloaded before its dependency silently re-imports
+the stale symbol and your edit appears to do nothing.
+
+Three things worth knowing:
+
+- Loading a **new data file needs no reload** -- that is just pasting a path into
+  the widget. Reload is only for code edits.
+- Adding a new helper module means adding it to `_RELOAD_CHAIN` in the right
+  position, or edits to it will not take effect.
+- `importlib.reload` cannot fix objects already built from old class
+  definitions. If behavior ever looks impossible, restart the kernel; that
+  remains the ground truth.
 
 ## Environment
 
@@ -483,36 +526,45 @@ writes a `batch_main_ui_outputs.csv` summary in the chosen parent folder.
 
 ## Verification Completed
 
-The latest Function 5 implementation was checked with:
+Static checks:
 
 ```bash
-python3 -m py_compile \
-  plot_rhs_power_analysis.py \
-  wideband_function5_power_ui.py \
-  wideband_main_ui.py \
-  batch_run_wideband_main_ui.py
-
-python3 -m json.tool Plot_All_Channel_Data_Wideband.ipynb
+python3 -m py_compile *.py
+python3 -m json.tool Plot_All_Channel_Data_Wideband.ipynb > /dev/null
 ```
 
-Real-data smoke testing used:
+Behavioral check used for the 2026-08-17 refactor, and the one to repeat before
+any substantial change. Copy one short session to scratch, run the batch runner
+from the old and new code, and byte-compare:
 
-```text
-/Users/jf/Library/CloudStorage/SynologyDrive-Endovascular/Jill/20260715 ic implant re/20260624 pt stimulation_260715_175113 A-012 stim cathodic first 200us 10uA 20Hz 20 pulses 49ms RP
+```bash
+python3 batch_run_wideband_main_ui.py "<scratch parent>" \
+  --functions raw filtered events response power \
+  --channels all --bandpass all --amplitude="-500-500" --power-mode prepost
+python3 batch_run_wideband_main_ui.py "<scratch parent>" \
+  --functions power --channels all --power-mode event
 ```
 
-With channel `A-012`, alpha `8-12 Hz`, and beta `13-30 Hz`:
+Note `--amplitude="-500-500"` must use the `=` form; argparse otherwise reads
+the leading minus as a flag.
 
-- pre/post mode produced two result rows;
-- stim-triggered mode detected 216 events and used all 216 for the tested window;
-- a batch power run created PNG/CSV/summary outputs successfully;
-- those smoke-test outputs were removed afterward so the data folder was not
-  left with test artifacts.
+Against `20260816 re stim yun/step2_260816_192732` (20 MB, 6 channels A-002 to
+A-007, 719,616 samples, 23.99 s, 0 timestamp gaps, stim on A-007, 38 events),
+all five PNGs and the power CSV were byte-identical before and after, and the
+summary CSV differed only in its `elapsed_s` timing column.
 
-There is no formal automated test suite yet. Before a substantial change, rerun
-the compile/JSON checks and smoke-test one short real RHS session. Do not run a
-large all-channel batch merely for verification unless the user asks because it
-can be slow and memory-intensive.
+The batch runner does not exercise the widget layer. That needs a driven UI
+pass: for each of the six functions, generate a preview, confirm **nothing is
+written during preview**, then Save and confirm the file lands in the selected
+RHS folder. All six were confirmed this way on the session above. Function 5
+Pre/Post mode correctly reports the short-pre-stim error on that session, which
+has only a few seconds of baseline; its event mode succeeds.
+
+Note the data under `SynologyDrive-Endovascular` are **dataless cloud
+placeholders** (`stat -f %b` reports 0 blocks). Reading one triggers a NAS
+download, so prefer a small session for smoke tests.
+
+There is still no automated test suite.
 
 ## Current Research Interpretation
 
@@ -533,9 +585,31 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
 
 ## Known Technical Limitations and Good Next Improvements
 
+0. **The batch runner and the notebook disagree on Function 3 filenames.** For
+   `pre=100, post=(0,500)` the notebook writes `pre100ms_post500ms` and
+   `batch_run_wideband_main_ui.py` writes `pre100ms_post0to500ms`. Both label
+   builders now sit in the codebase deliberately: the correct one is
+   `plot_rhs_stim_triggered_events.event_window_label`, and the batch copy is
+   kept only because reconciling them renames existing batch output files. This
+   also silently defeats `--skip-existing` against notebook-produced PNGs.
+   Fixing it means deleting `batch_run_wideband_main_ui.event_window_label` and
+   importing the shared one.
+
+0b. The batch runner also has **no stim-channel fallback**: `run_event_plot` and
+   `run_power_analysis` bail with "no nonzero stim_data" where the notebook
+   would scan the remaining recorded channels. `rhs_stim.resolve_stim_channel`
+   is the shared implementation; the batch runner simply does not call it yet.
+
+0c. Filename conventions still differ between functions: Function 5 keeps the
+   dash (`A-014`) while everything else strips it (`A014`), and `.` becomes `p`
+   in the events/response names but not in Function 2's. Unifying renames output
+   files, so it needs its own decision.
+
 1. Functions 1 and 2 should eventually gain the same all-recorded-channel stim
    fallback already used by Functions 3 and 5. Until then, use `Channels = all`
-   when the stim channel must be identified in those plots.
+   when the stim channel must be identified in those plots. This is now a
+   one-argument change: they call `rhs_stim.resolve_stim_channel(...,
+   fallback=False)`; Functions 3 and 5 pass `fallback=True`.
 2. Function 5 would benefit from displaying detected first-stim time, last-stim
    time, clean pre duration, and clean post duration before analysis. This would
    make `Window`/`State guard` errors self-explanatory.
@@ -557,14 +631,21 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
 1. Read this file and `Plot_All_Channel_Data_Wideband.ipynb` Markdown before
    changing the workflow.
 2. Inspect `git status` first and preserve unrelated user changes.
-3. Treat the notebook as UI and keep numerical logic in succinct helper files.
+3. Follow the Layering Rule above. If you find yourself parsing a string or
+   building a filename inside a `wideband_function*_ui.py`, it belongs one layer
+   down -- that is precisely how the batch runner and the notebook drifted apart.
 4. When changing a behavior, update both the active helper and the notebook
    Markdown explanation.
-5. Remember that Function 3 is active in `wideband_function3_ui.py`, not the
-   legacy `_BLOCK_3_SOURCE` string.
-6. Keep manual-save and same-folder output behavior intact.
-7. Validate with `py_compile`, notebook JSON parsing, and a focused real-data
-   smoke test when access to the referenced data folder is available.
+5. Adding a helper module means adding it to `_RELOAD_CHAIN` in
+   `wideband_main_ui.py`, leaves-first, or your edits will not take effect in
+   the notebook.
+6. Keep manual-save and same-folder output behavior intact: preview must never
+   write, and saves go to the selected RHS folder via the atomic temp+replace
+   helpers in `wideband_ui_common.py`.
+7. Validate with `py_compile`, notebook JSON parsing, and the byte-comparison
+   smoke test described under Verification Completed.
+8. Prefer editing one function's UI module over touching `wideband_ui_common.py`;
+   a change there affects all six.
 
 A useful opening prompt in the new account is:
 

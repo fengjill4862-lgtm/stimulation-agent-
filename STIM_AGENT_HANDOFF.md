@@ -647,16 +647,24 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
    semantics. A session with stim on an unselected channel is now analyzed by
    batch instead of being skipped.
 
-0c. Filename conventions still differ between functions: Function 5 keeps the
-   dash (`A-014`) while everything else strips it (`A014`), and `.` becomes `p`
-   in the events/response names but not in Function 2's. Unifying renames output
-   files, so it needs its own decision.
+0c. ~~Filename conventions differ between functions.~~ **Fixed 2026-08-17.**
+   Standardized on the stripped-dash form: Function 5 now writes
+   `A002_to_A007` like everything else, and band labels map decimals to `p`
+   (`delta_0p5-4Hz`). The dash inside a frequency range is preserved, since it
+   separates the two frequencies -- `rhs_naming.band_token` exists for exactly
+   that distinction. **Power PNG/CSV files written before this date used
+   `A-002_to_A-007` and `0.5-4Hz` and will be regenerated once.**
 
-1. Functions 1 and 2 should eventually gain the same all-recorded-channel stim
-   fallback already used by Functions 3 and 5. Until then, use `Channels = all`
-   when the stim channel must be identified in those plots. This is now a
-   one-argument change: they call `rhs_stim.resolve_stim_channel(...,
-   fallback=False)`; Functions 3 and 5 pass `fallback=True`.
+1. ~~Functions 1 and 2 lack the all-recorded-channel stim fallback.~~
+   **Fixed 2026-08-17.** Both now call `rhs_stim.resolve_stim_channel` with the
+   fallback enabled, as do the batch raw and filtered plots.
+   `plot_raw_channels_with_stim_pulse` gained optional `stim_channel_name` /
+   `stim_uA` parameters so Function 1 can draw the biphasic pulse caption from a
+   stim channel that is not itself displayed. Status text distinguishes the two
+   cases: `A-007 *` when the stim channel is shown, `A-007 (not displayed)` when
+   it was found elsewhere in the folder, so the message never implies a star
+   that is not drawn.
+
 2. Function 5 would benefit from displaying detected first-stim time, last-stim
    time, clean pre duration, and clean post duration before analysis. This would
    make `Window`/`State guard` errors self-explanatory.

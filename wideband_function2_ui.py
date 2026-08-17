@@ -161,11 +161,11 @@ def show_function2_bandpass_filtered(namespace: MutableMapping[str, object] | No
         samples_total = sum(int(item["samples_total"]) for item in summaries)
         percent_selected = samples_selected / samples_total * 100.0 if samples_total else 0.0
         time_status = "all time" if time_window is None else f"{time_window[0]:g}-{time_window[1]:g} s"
-        stim_status = (
-            "no nonzero stim_data found in selected channels"
-            if stim_channel_name is None
-            else f"stim channel: {stim_channel_name} *"
-        )
+        if stim_channel_name is None:
+            stim_status = "no nonzero stim_data found in any recorded channel"
+        else:
+            shown = " *" if stim_channel_name in channels else " (not displayed)"
+            stim_status = f"stim channel: {stim_channel_name}{shown}"
         filter_status.value = (
             f"Loaded {len(loaded)} RHS file(s) for {len(channels)} channel(s). "
             f"Time window: {time_status}. "

@@ -630,15 +630,16 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
 
 ## Known Technical Limitations and Good Next Improvements
 
-0. **The batch runner and the notebook disagree on Function 3 filenames.** For
-   `pre=100, post=(0,500)` the notebook writes `pre100ms_post500ms` and
-   `batch_run_wideband_main_ui.py` writes `pre100ms_post0to500ms`. Both label
-   builders now sit in the codebase deliberately: the correct one is
-   `plot_rhs_stim_triggered_events.event_window_label`, and the batch copy is
-   kept only because reconciling them renames existing batch output files. This
-   also silently defeats `--skip-existing` against notebook-produced PNGs.
-   Fixing it means deleting `batch_run_wideband_main_ui.event_window_label` and
-   importing the shared one.
+0. ~~The batch runner and the notebook disagree on Function 3 filenames.~~
+   **Fixed 2026-08-17.** `batch_run_wideband_main_ui.py` dropped its private
+   `event_window_label` and `parse_post_window_ms` and now imports
+   `event_window_label` / `parse_post_time_ms` from
+   `plot_rhs_stim_triggered_events`. Both front ends emit
+   `pre100ms_post500ms` for `pre=100, post=500`, and `--skip-existing` now
+   recognises notebook-produced PNGs. The shared parser accepts the union of the
+   two old grammars: `all`/`end` (from the UI) and en/em/minus dashes (from
+   batch). **Batch PNGs written before this date used the old
+   `pre100ms_post0to500ms` form and will be regenerated once.**
 
 0b. ~~The batch runner has no stim-channel fallback.~~ **Fixed 2026-08-17.**
    All three batch sites call `rhs_stim.resolve_stim_channel`; the filtered-plot

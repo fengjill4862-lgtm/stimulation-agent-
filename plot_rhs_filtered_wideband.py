@@ -31,12 +31,12 @@ from rhs_naming import channel_label_collapsed, signed_number_plain_decimal, sig
 
 
 _NUMBER_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
-_DASH_TRANSLATION = str.maketrans({"–": "-", "—": "-", "−": "-"})
+DASH_TRANSLATION = str.maketrans({"–": "-", "—": "-", "−": "-"})
 
 
 def _parse_range_pair(text: str, unit_name: str) -> tuple[float, float]:
     """Parse two numbers separated by '-', 'to', ',', or ':'."""
-    normalized = text.translate(_DASH_TRANSLATION).strip()
+    normalized = text.translate(DASH_TRANSLATION).strip()
     match = re.search(
         rf"({_NUMBER_PATTERN})\s*(?:-|to|,|:)\s*({_NUMBER_PATTERN})",
         normalized,

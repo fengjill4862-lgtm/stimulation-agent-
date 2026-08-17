@@ -23,6 +23,7 @@ os.environ.setdefault("XDG_CACHE_HOME", str(_xdg_cache))
 import matplotlib.pyplot as plt
 
 from plot_rhs_filtered_wideband import (
+    DASH_TRANSLATION,
     amplitude_mask,
     bandpass_filter_wideband,
     format_bandpass_filename_label,
@@ -519,7 +520,7 @@ def parse_pre_time_ms(value: float) -> float:
 
 def parse_post_time_ms(value: str) -> tuple[float, float | None]:
     cleaned = value.strip().lower().replace("ms", "")
-    cleaned = re.sub(r"\s+", "", cleaned)
+    cleaned = re.sub(r"\s+", "", cleaned).translate(DASH_TRANSLATION)
     if cleaned in {"", "all", "end"}:
         return 0.0, None
 

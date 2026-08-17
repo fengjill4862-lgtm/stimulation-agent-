@@ -55,12 +55,13 @@ from plot_rhs_raw_wideband_with_stim_legend import (
     time_window_label,
 )
 from plot_rhs_stim_triggered_events import (
+    event_window_label,
+    parse_post_time_ms,
     build_stim_triggered_events,
     default_stim_events_grid_output_path,
     filter_channel_data,
     plot_stim_triggered_events_grid,
 )
-from rhs_naming import number_token
 from rhs_files import atomic_write_figure, atomic_write_text
 from rhs_stim import resolve_stim_channel
 
@@ -206,16 +207,6 @@ def read_rhs_folder_selected_channels(folder: Path, channels: list[str]) -> RhsF
         rhs_file_count=len(rhs_files),
         timestamp_gaps=timestamp_gaps,
     )
-
-
-def event_window_label(pre_time_ms: float, post_window_ms: tuple[float, float | None]) -> str:
-    """Mirror Function 3's filename window label."""
-    pre_label = number_token(pre_time_ms)
-    if post_window_ms[1] is None:
-        post_label = f"0to{number_token(post_window_ms[0])}ms"
-    else:
-        post_label = f"{number_token(post_window_ms[0])}to{number_token(post_window_ms[1])}ms"
-    return f"pre{pre_label}ms_post{post_label}"
 
 
 def run_raw_plot(
@@ -483,25 +474,6 @@ def run_power_analysis(
     return result.png_path, result.csv_path, result.event_count, result.stim_channel_name
 
 
-def parse_post_window_ms(text: str) -> tuple[float, float | None]:
-    cleaned = text.strip().lower().replace("ms", "")
-    if not cleaned:
-        raise ValueError("Post time must not be empty.")
-    for dash in ("–", "—", "−"):
-        cleaned = cleaned.replace(dash, "-")
-    if "-" in cleaned:
-        start_text, end_text = cleaned.split("-", 1)
-        start = float(start_text.strip())
-        end = float(end_text.strip())
-        if start < 0 or end <= start:
-            raise ValueError("Post time range must be nonnegative and increasing.")
-        return start, end
-    end = float(cleaned)
-    if end <= 0:
-        raise ValueError("Post time must be greater than 0 ms.")
-    return 0.0, end
-
-
 def write_summary(summary_path: Path, rows: list[dict[str, object]]) -> None:
     if not rows:
         return
@@ -535,7 +507,7 @@ def run_batch(args: argparse.Namespace) -> int:
         if args.response_amplitude.strip().lower() in {"", "all", "none"}
         else parse_amplitude_range(args.response_amplitude)
     )
-    post_window_ms = parse_post_window_ms(args.post_ms)
+    post_window_ms = parse_post_time_ms(args.post_ms)
     power_bands = parse_power_bands(args.power_bands)
     power_baseline_window = parse_time_window_ms(
         args.power_baseline_ms,

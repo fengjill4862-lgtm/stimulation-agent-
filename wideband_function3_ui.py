@@ -27,6 +27,7 @@ from plot_rhs_raw_wideband_with_stim_legend import (
 )
 from rhs_stim import NO_STIM_IN_FOLDER, read_selected_channels, resolve_stim_channel
 from plot_rhs_filtered_wideband import (
+    bandpass_warning,
     format_bandpass_status,
     parse_amplitude_range,
     parse_frequency_range,
@@ -324,12 +325,17 @@ def show_function3_stim_triggered_events(
             if post_window_ms[0] > 0
             else ""
         )
+        warning = bandpass_warning(band_hz)
+        warning_html = (
+            f" <b style='color:#b26a00'>Warning:</b> {warning}" if warning else ""
+        )
         event_status.value = (
             f"Generated one combined PNG preview with {len(events)} event(s) "
             f"from {len(loaded)} RHS file(s), using {stim_detection_channel} stim_data "
             f"for grouped onsets ({first_onset:g} to {last_onset:g} s; "
             f"train gap {train_gap_ms:g} ms; window {window_label}{blank_note}; "
             f"stim current {'shown' if show_stim_current else 'hidden'})."
+            f"{warning_html}"
         )
 
     def save_event_pngs(_button=None) -> None:

@@ -264,6 +264,7 @@ def plot_stim_triggered_events_grid(
             ax = axes[axis_row, event_col]
             event_uV = filtered_uV[window.sample_slice]
             in_range = amplitude_mask(event_uV, amplitude_uV)
+            hidden_samples = int(event_uV.size - np.count_nonzero(in_range))
             in_range = _apply_response_blank_mask(
                 in_range, event_uV.size, sample_rate_hz, window
             )
@@ -284,6 +285,18 @@ def plot_stim_triggered_events_grid(
                 ax.axhline(low_uV, color="#d62728", linewidth=0.5, alpha=0.3)
                 ax.axhline(high_uV, color="#d62728", linewidth=0.5, alpha=0.3)
                 ax.set_ylim(low_uV, high_uV)
+                if hidden_samples:
+                    # Never clip silently: say how many samples lie outside the window.
+                    ax.text(
+                        0.99,
+                        0.92,
+                        f"{hidden_samples} samples outside {low_uV:g}..{high_uV:g} uV hidden",
+                        transform=ax.transAxes,
+                        ha="right",
+                        va="top",
+                        fontsize=5.5,
+                        color="0.4",
+                    )
 
             if channel_index == 0:
                 ax.set_title(
@@ -316,6 +329,7 @@ def plot_stim_triggered_events_grid(
                     "samples_total": int(event_uV.size),
                     "samples_in_amplitude_range": int(np.count_nonzero(in_range)),
                     "percent_in_amplitude_range": _percent_true(in_range),
+                    "hidden_samples": hidden_samples,
                     "filtered_rms_uV": _rms(event_uV),
                 }
             )
@@ -513,11 +527,8 @@ def _rms(values: np.ndarray) -> float:
 # Event window parsing and filename labels.
 #
 # These lived in wideband_function3_ui.py, where the batch runner could not
-# reach them -- which is why batch_run_wideband_main_ui.py grew its own
-# event_window_label() that disagrees with this one. For pre=100, post=(0,500)
-# this returns "pre100ms_post500ms" while the batch copy returns
-# "pre100ms_post0to500ms". Reconciling them renames batch output files, so it is
-# deliberately left as a follow-up rather than folded into this refactor.
+# reach them; batch_run_wideband_main_ui.py imports them from here since
+# 2026-08-17 so both front ends name files identically ("pre100ms_post500ms").
 # -----------------------------------------------------------------------------
 
 def parse_pre_time_ms(value: float) -> float:

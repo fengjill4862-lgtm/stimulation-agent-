@@ -36,6 +36,7 @@ _RELOAD_CHAIN = (
     "rhs_files",
     # Depend on the leaves above, and on each other in this order.
     "plot_rhs_raw_wideband_with_stim_legend",
+    "rhs_reader",
     "plot_rhs_filtered_wideband",
     "plot_rhs_stim_triggered_events",
     "plot_rhs_power_analysis",
@@ -122,20 +123,33 @@ def check_reload_chain() -> list[str]:
     """
     import re
 
+    def module_path(name: str) -> pathlib.Path:
+        # Dotted names are package modules: stim_analysis.config -> stim_analysis/config.py
+        return pathlib.Path(name.replace(".", "/") + ".py")
+
+    def project_imports(source: str) -> list[str]:
+        found = re.findall(r"^from ([a-z_][a-z0-9_.]*) import", source, flags=re.M)
+        found += re.findall(r"^import ([a-z_][a-z0-9_.]*)\s*$", source, flags=re.M)
+        return found
+
     position = {name: index for index, name in enumerate(_RELOAD_CHAIN)}
     problems: list[str] = []
     for name, index in position.items():
-        source = pathlib.Path(f"{name}.py").read_text()
-        for dependency in re.findall(r"^from ([a-z_][a-z0-9_]*) import", source, flags=re.M):
+        source = module_path(name).read_text()
+        for dependency in project_imports(source):
             if dependency in position and position[dependency] > index:
                 problems.append(
                     f"{name} (position {index}) imports {dependency} "
                     f"(position {position[dependency]}) -- dependency must come first"
                 )
+            elif dependency not in position and module_path(dependency).exists():
+                problems.append(
+                    f"{name} imports {dependency}, which is missing from _RELOAD_CHAIN"
+                )
     for function_name, module_name in _LAUNCHERS.items():
-        source = pathlib.Path(f"{module_name}.py").read_text()
-        for dependency in re.findall(r"^from ([a-z_][a-z0-9_]*) import", source, flags=re.M):
-            if dependency not in position and pathlib.Path(f"{dependency}.py").exists():
+        source = module_path(module_name).read_text()
+        for dependency in project_imports(source):
+            if dependency not in position and module_path(dependency).exists():
                 problems.append(
                     f"{module_name} imports {dependency}, which is missing from _RELOAD_CHAIN"
                 )
@@ -143,8 +157,6 @@ def check_reload_chain() -> list[str]:
 
 
 if __name__ == "__main__":
-    import pathlib
-
     issues = check_reload_chain()
     if issues:
         print("_RELOAD_CHAIN problems:")

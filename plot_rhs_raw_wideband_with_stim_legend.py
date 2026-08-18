@@ -10,7 +10,7 @@ import re
 import struct
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Sequence
 
@@ -37,6 +37,11 @@ SAMPLES_PER_DATA_BLOCK = 128
 RHS_MAGIC_NUMBER = 0xD69127AC
 
 
+RHS_STIM_FLAG_AMP_SETTLE = 0x2000
+RHS_STIM_FLAG_CHARGE_RECOVERY = 0x4000
+RHS_STIM_FLAG_COMPLIANCE_LIMIT = 0x8000
+
+
 @dataclass(frozen=True)
 class RhsHeader:
     path: Path
@@ -53,6 +58,22 @@ class RhsHeader:
     bytes_per_block: int
     num_data_blocks: int
     sample_count: int
+    # Additive fields (2026-08-17). Everything below was already parsed by
+    # _read_header and discarded; keeping it costs nothing and lets the
+    # session-level analysis use per-run impedance and hardware settings.
+    impedance_magnitude_ohms: dict[str, float] = field(default_factory=dict)
+    impedance_phase_deg: dict[str, float] = field(default_factory=dict)
+    dsp_enabled: bool = False
+    actual_dsp_cutoff_hz: float = float("nan")
+    actual_lower_bandwidth_hz: float = float("nan")
+    actual_lower_settle_bandwidth_hz: float = float("nan")
+    actual_upper_bandwidth_hz: float = float("nan")
+    actual_impedance_test_frequency_hz: float = float("nan")
+    amp_settle_mode: int = 0
+    charge_recovery_mode: int = 0
+    charge_recovery_current_limit_uA: float = float("nan")
+    charge_recovery_target_voltage_v: float = float("nan")
+    notes: tuple[str, str, str] = ("", "", "")
 
 
 @dataclass(frozen=True)
@@ -92,26 +113,26 @@ def _read_header(fid, path: Path, file_size: int) -> RhsHeader:
     version = (_read_scalar(fid, "h"), _read_scalar(fid, "h"))
     sample_rate_hz = float(_read_scalar(fid, "f"))
 
-    _dsp_enabled = _read_scalar(fid, "h")
-    _actual_dsp_cutoff_frequency = _read_scalar(fid, "f")
-    _actual_lower_bandwidth = _read_scalar(fid, "f")
-    _actual_lower_settle_bandwidth = _read_scalar(fid, "f")
-    _actual_upper_bandwidth = _read_scalar(fid, "f")
+    dsp_enabled = _read_scalar(fid, "h")
+    actual_dsp_cutoff_frequency = _read_scalar(fid, "f")
+    actual_lower_bandwidth = _read_scalar(fid, "f")
+    actual_lower_settle_bandwidth = _read_scalar(fid, "f")
+    actual_upper_bandwidth = _read_scalar(fid, "f")
     _desired_dsp_cutoff_frequency = _read_scalar(fid, "f")
     _desired_lower_bandwidth = _read_scalar(fid, "f")
     _desired_lower_settle_bandwidth = _read_scalar(fid, "f")
     _desired_upper_bandwidth = _read_scalar(fid, "f")
     _notch_filter_mode = _read_scalar(fid, "h")
     _desired_impedance_test_frequency = _read_scalar(fid, "f")
-    _actual_impedance_test_frequency = _read_scalar(fid, "f")
-    _amp_settle_mode = _read_scalar(fid, "h")
-    _charge_recovery_mode = _read_scalar(fid, "h")
+    actual_impedance_test_frequency = _read_scalar(fid, "f")
+    amp_settle_mode = _read_scalar(fid, "h")
+    charge_recovery_mode = _read_scalar(fid, "h")
 
     stim_step_size_a = float(_read_scalar(fid, "f"))
-    _charge_recovery_current_limit = _read_scalar(fid, "f")
-    _charge_recovery_target_voltage = _read_scalar(fid, "f")
+    charge_recovery_current_limit_a = _read_scalar(fid, "f")
+    charge_recovery_target_voltage_v = _read_scalar(fid, "f")
 
-    _notes = (_read_qstring(fid), _read_qstring(fid), _read_qstring(fid))
+    notes = (_read_qstring(fid), _read_qstring(fid), _read_qstring(fid))
     dc_amp_data_saved = bool(_read_scalar(fid, "h"))
     _board_mode = _read_scalar(fid, "h")
     _reference_channel = _read_qstring(fid)
@@ -121,6 +142,8 @@ def _read_header(fid, path: Path, file_size: int) -> RhsHeader:
     board_dac_channels: list[str] = []
     board_dig_in_channels: list[str] = []
     board_dig_out_channels: list[str] = []
+    impedance_magnitude_ohms: dict[str, float] = {}
+    impedance_phase_deg: dict[str, float] = {}
 
     number_of_signal_groups = _read_scalar(fid, "h")
     for _signal_group in range(number_of_signal_groups):
@@ -147,13 +170,15 @@ def _read_header(fid, path: Path, file_size: int) -> RhsHeader:
             _voltage_threshold = _read_scalar(fid, "h")
             _digital_trigger_channel = _read_scalar(fid, "h")
             _digital_edge_polarity = _read_scalar(fid, "h")
-            _electrode_impedance_magnitude = _read_scalar(fid, "f")
-            _electrode_impedance_phase = _read_scalar(fid, "f")
+            electrode_impedance_magnitude = _read_scalar(fid, "f")
+            electrode_impedance_phase = _read_scalar(fid, "f")
 
             if not channel_enabled:
                 continue
             if signal_type == 0:
                 amplifier_channels.append(native_channel_name)
+                impedance_magnitude_ohms[native_channel_name] = float(electrode_impedance_magnitude)
+                impedance_phase_deg[native_channel_name] = float(electrode_impedance_phase)
             elif signal_type == 3:
                 board_adc_channels.append(native_channel_name)
             elif signal_type == 4:
@@ -201,6 +226,19 @@ def _read_header(fid, path: Path, file_size: int) -> RhsHeader:
         bytes_per_block=bytes_per_block,
         num_data_blocks=num_data_blocks,
         sample_count=sample_count,
+        impedance_magnitude_ohms=impedance_magnitude_ohms,
+        impedance_phase_deg=impedance_phase_deg,
+        dsp_enabled=bool(dsp_enabled),
+        actual_dsp_cutoff_hz=float(actual_dsp_cutoff_frequency),
+        actual_lower_bandwidth_hz=float(actual_lower_bandwidth),
+        actual_lower_settle_bandwidth_hz=float(actual_lower_settle_bandwidth),
+        actual_upper_bandwidth_hz=float(actual_upper_bandwidth),
+        actual_impedance_test_frequency_hz=float(actual_impedance_test_frequency),
+        amp_settle_mode=int(amp_settle_mode),
+        charge_recovery_mode=int(charge_recovery_mode),
+        charge_recovery_current_limit_uA=float(charge_recovery_current_limit_a) / 1.0e-6,
+        charge_recovery_target_voltage_v=float(charge_recovery_target_voltage_v),
+        notes=notes,
     )
 
 
@@ -210,6 +248,22 @@ def _decode_stim_data(stim_raw: np.ndarray, stim_step_size_uA: float) -> np.ndar
     is_negative_phase = (stim_raw & np.uint16(0x0100)) != 0
     sign = np.where(is_negative_phase, -1.0, 1.0).astype(np.float32)
     return magnitude * sign * np.float32(stim_step_size_uA)
+
+
+def decode_stim_flags(stim_raw: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return the RHS stim flag bits as boolean arrays.
+
+    Returns ``(amp_settle, charge_recovery, compliance_limit)``. These flags
+    ride in the upper bits of the same 16-bit word whose low byte carries the
+    commanded current magnitude, so ``_decode_stim_data`` ignores them. Same
+    bit test as ``rename_rhs_folders_by_stim_waveform.read_rhs_stim_channel``
+    uses for the compliance bit.
+    """
+    stim_raw = np.asarray(stim_raw).astype(np.uint16, copy=False)
+    amp_settle = (stim_raw & np.uint16(RHS_STIM_FLAG_AMP_SETTLE)) != 0
+    charge_recovery = (stim_raw & np.uint16(RHS_STIM_FLAG_CHARGE_RECOVERY)) != 0
+    compliance = (stim_raw & np.uint16(RHS_STIM_FLAG_COMPLIANCE_LIMIT)) != 0
+    return amp_settle, charge_recovery, compliance
 
 
 def read_rhs_channel(path: Path, channel_name: str) -> RhsChannelFile:

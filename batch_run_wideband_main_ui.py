@@ -8,10 +8,7 @@ import csv
 import os
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
-
-import numpy as np
 
 _cache_root = Path(tempfile.gettempdir()) / "codex_matplotlib_cache"
 _mpl_cache = _cache_root / "mpl"
@@ -44,10 +41,6 @@ from plot_rhs_power_analysis import (
     power_rows_to_csv,
 )
 from plot_rhs_raw_wideband_with_stim_legend import (
-    SAMPLES_PER_DATA_BLOCK,
-    _decode_stim_data,
-    _read_exact,
-    _read_header,
     channel_selection_label,
     default_output_path,
     plot_raw_channels_with_stim_pulse,
@@ -63,19 +56,8 @@ from plot_rhs_stim_triggered_events import (
     plot_stim_triggered_events_grid,
 )
 from rhs_files import atomic_write_figure, atomic_write_text
+from rhs_reader import RhsFolderData, read_rhs_folder_selected_channels
 from rhs_stim import resolve_stim_channel
-
-
-@dataclass(frozen=True)
-class RhsFolderData:
-    """Raw and stim data for all selected channels in one RHS session folder."""
-
-    channels: list[str]
-    raw_uV: list[np.ndarray]
-    stim_uA: list[np.ndarray]
-    sample_rate_hz: float
-    rhs_file_count: int
-    timestamp_gaps: int
 
 
 def find_rhs_session_folders(parent_folder: Path) -> list[Path]:
@@ -92,121 +74,6 @@ def find_rhs_session_folders(parent_folder: Path) -> list[Path]:
         for child in sorted(parent_folder.iterdir())
         if child.is_dir() and list(child.glob("*.rhs"))
     ]
-
-
-def read_rhs_file_selected_channels(
-    path: Path, wanted_channels: list[str]
-) -> tuple[list[str], list[np.ndarray], list[np.ndarray], float, int]:
-    """Read selected amplifier and stim traces from one RHS file in one pass."""
-    path = path.expanduser()
-    file_size = path.stat().st_size
-    with path.open("rb") as fid:
-        header = _read_header(fid, path, file_size)
-        missing = [channel for channel in wanted_channels if channel not in header.amplifier_channels]
-        if missing:
-            available = ", ".join(header.amplifier_channels)
-            raise ValueError(
-                f"{path.name}: channels not found: {', '.join(missing)}. "
-                f"Available amplifier channels: {available}"
-            )
-
-        channel_indices = [header.amplifier_channels.index(channel) for channel in wanted_channels]
-        channels = [header.amplifier_channels[index] for index in channel_indices]
-        raw_uV = [
-            np.empty(header.sample_count, dtype=np.float32)
-            for _channel in channels
-        ]
-        stim_uA = [
-            np.empty(header.sample_count, dtype=np.float32)
-            for _channel in channels
-        ]
-
-        n_amp_channels = len(header.amplifier_channels)
-        amp_matrix_words = SAMPLES_PER_DATA_BLOCK * n_amp_channels
-        amp_matrix_bytes = amp_matrix_words * 2
-        amp_offset = SAMPLES_PER_DATA_BLOCK * 4
-        dc_offset = amp_offset + amp_matrix_bytes
-        stim_offset = dc_offset + (amp_matrix_bytes if header.dc_amp_data_saved else 0)
-
-        timestamp_gaps = 0
-        previous_timestamp: int | None = None
-
-        for block_number in range(header.num_data_blocks):
-            block = _read_exact(fid, header.bytes_per_block)
-            timestamps = np.frombuffer(
-                block, dtype="<i4", count=SAMPLES_PER_DATA_BLOCK, offset=0
-            )
-            if timestamps.size:
-                timestamp_gaps += int(np.count_nonzero(np.diff(timestamps) != 1))
-                if previous_timestamp is not None and timestamps[0] != previous_timestamp + 1:
-                    timestamp_gaps += 1
-                previous_timestamp = int(timestamps[-1])
-
-            sample_start = block_number * SAMPLES_PER_DATA_BLOCK
-            sample_end = sample_start + SAMPLES_PER_DATA_BLOCK
-            amp_flat = np.frombuffer(
-                block,
-                dtype="<u2",
-                count=amp_matrix_words,
-                offset=amp_offset,
-            ).reshape(n_amp_channels, SAMPLES_PER_DATA_BLOCK)
-            stim_flat = np.frombuffer(
-                block,
-                dtype="<u2",
-                count=amp_matrix_words,
-                offset=stim_offset,
-            ).reshape(n_amp_channels, SAMPLES_PER_DATA_BLOCK)
-
-            for output_index, channel_index in enumerate(channel_indices):
-                raw_block = amp_flat[channel_index].astype(np.float32)
-                raw_uV[output_index][sample_start:sample_end] = (
-                    raw_block - np.float32(32768.0)
-                ) * np.float32(0.195)
-                stim_uA[output_index][sample_start:sample_end] = _decode_stim_data(
-                    stim_flat[channel_index],
-                    header.stim_step_size_uA,
-                )
-
-    return channels, raw_uV, stim_uA, header.sample_rate_hz, timestamp_gaps
-
-
-def read_rhs_folder_selected_channels(folder: Path, channels: list[str]) -> RhsFolderData:
-    """Read and concatenate all RHS files for selected channels."""
-    rhs_files = sorted(folder.expanduser().glob("*.rhs"))
-    if not rhs_files:
-        raise FileNotFoundError(f"No .rhs files found in {folder}")
-
-    raw_parts: list[list[np.ndarray]] = [[] for _channel in channels]
-    stim_parts: list[list[np.ndarray]] = [[] for _channel in channels]
-    sample_rates: set[float] = set()
-    timestamp_gaps = 0
-    loaded_channels: list[str] | None = None
-
-    for rhs_file in rhs_files:
-        file_channels, raw_uV, stim_uA, sample_rate_hz, file_timestamp_gaps = (
-            read_rhs_file_selected_channels(rhs_file, channels)
-        )
-        if loaded_channels is None:
-            loaded_channels = file_channels
-        elif loaded_channels != file_channels:
-            raise ValueError(f"{folder.name}: channel list changed across RHS files.")
-        sample_rates.add(round(float(sample_rate_hz), 9))
-        timestamp_gaps += file_timestamp_gaps
-        for index in range(len(channels)):
-            raw_parts[index].append(raw_uV[index])
-            stim_parts[index].append(stim_uA[index])
-
-    if len(sample_rates) != 1:
-        raise ValueError(f"{folder.name}: mixed sample rates {sample_rates}")
-
-    return RhsFolderData(
-        channels=loaded_channels or channels,
-        raw_uV=[np.concatenate(parts) for parts in raw_parts],
-        stim_uA=[np.concatenate(parts) for parts in stim_parts],
-        sample_rate_hz=float(next(iter(sample_rates))),
-        rhs_file_count=len(rhs_files),
-        timestamp_gaps=timestamp_gaps,
-    )
 
 
 def run_raw_plot(

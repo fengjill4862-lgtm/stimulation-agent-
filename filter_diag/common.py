@@ -35,6 +35,7 @@ DEFAULT_LIVE = Path("/Users/jf/SynologyDrive/Research/Stimulation/20260817 re st
 DEFAULT_DEAD = Path("/Users/jf/SynologyDrive/Research/Stimulation/20260816 re stim Yun dead rat")
 DEFAULT_OUTPUT = DEFAULT_LIVE / "filter_diagnosis"
 EXCLUDED_CHANNELS = ("A-031",)
+OPEN_CHANNEL_KOHM = 2000.0  # header impedance above this = disconnected contact, excluded
 ADC_FULL_SCALE_UV = 0.195 * 32768.0
 
 
@@ -238,11 +239,14 @@ class SessionSelection:
     all_validations: list[RunValidation]
     channels: list[str]
     records: dict[str, RunRecord]
+    open_channels: dict[str, float] = field(default_factory=dict)
 
     def summary(self) -> str:
         inc = ", ".join(f"{v.run_id}({v.amplitude_uA_data:g}uA)" for v in self.included)
         exc = ", ".join(f"{v.run_id}[{v.exclusion_reason or v.block}]" for v in self.excluded)
-        return f"{self.session}: included {len(self.included)} [{inc}]; excluded {len(self.excluded)} [{exc}]"
+        opens = ", ".join(f"{c} ({z / 1e3:.1f} MOhm)" for c, z in sorted(self.open_channels.items()))
+        return (f"{self.session}: included {len(self.included)} [{inc}]; excluded {len(self.excluded)} [{exc}]; "
+                f"channels {', '.join(self.channels)}" + (f"; open channels excluded: {opens}" if opens else ""))
 
 
 def _is_single_pulse_ladder(v: RunValidation) -> bool:
@@ -277,13 +281,21 @@ def select_session(parent: Path, session: str, cfg: AnalysisConfig, *, progress:
         if not keep and not v.exclusion_reason:
             v.exclusion_reason = "no_stim" if v.n_detected == 0 else ("paired_or_train" if not _is_single_pulse_ladder(v) else "excluded")
     channels: list[str] = []
+    open_channels: dict[str, float] = {}
     for r in records.values():
         for c in r.channels:
+            z_kohm = r.impedance_ohms.get(c, float("nan")) / 1e3
+            if np.isfinite(z_kohm) and z_kohm > OPEN_CHANNEL_KOHM:
+                open_channels[c] = max(open_channels.get(c, 0.0), z_kohm)
+                continue
             if c not in channels and c not in EXCLUDED_CHANNELS:
                 channels.append(c)
+    channels = [c for c in channels if c not in open_channels]
     channels.sort(key=lambda c: int(c.split("-")[-1]))
     included.sort(key=lambda v: (v.amplitude_uA_data, v.run_id))
-    return SessionSelection(session, parent, included, excluded, validations, channels, records)
+    selection = SessionSelection(session, parent, included, excluded, validations, channels, records)
+    selection.open_channels = open_channels
+    return selection
 
 
 def load_diag_run(selection: SessionSelection, v: RunValidation, cfg: AnalysisConfig, *, keep_data: bool = False) -> DiagRun:
@@ -413,6 +425,7 @@ __all__ = [
     "DEFAULT_LIVE",
     "DEFAULT_OUTPUT",
     "DiagRun",
+    "OPEN_CHANNEL_KOHM",
     "SessionSelection",
     "TailFit",
     "analog_highpass",

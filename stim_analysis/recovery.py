@@ -153,6 +153,11 @@ def condition_windows(trials: pd.DataFrame, cfg: AnalysisConfig, floor_ms_by_run
     for (run_id, channel), group in trials.groupby(["run_id", "channel"], sort=False):
         recovery = group["recovery_ms"].to_numpy(dtype=float)
         censored = group["censored"].to_numpy(dtype=bool)
+        contaminated = (
+            group["baseline_contaminated"].to_numpy(dtype=bool)
+            if "baseline_contaminated" in group
+            else np.zeros(recovery.size, dtype=bool)
+        )
         n = recovery.size
         floor = float(floor_ms_by_run.get(run_id, 1.0))
         q = float(np.quantile(recovery, cfg.recovery_quantile)) if n else float("nan")
@@ -164,8 +169,9 @@ def condition_windows(trials: pd.DataFrame, cfg: AnalysisConfig, floor_ms_by_run
         post_start = min(post_start, epoch_end) if np.isfinite(post_start) else post_start
         post_end = min(post_start + cfg.post_length_ms, epoch_end) if np.isfinite(post_start) else float("nan")
         blank_end = recovery + cfg.blank_margin_ms
-        retained_early = (~censored) & (blank_end <= post_start) if np.isfinite(post_start) else np.zeros(n, bool)
-        retained_late = (~censored) & (blank_end < cfg.late_ms[0])
+        usable = (~censored) & (~contaminated)
+        retained_early = usable & (blank_end <= post_start) if np.isfinite(post_start) else np.zeros(n, bool)
+        retained_late = usable & (blank_end < cfg.late_ms[0])
         n_retained = int(np.count_nonzero(retained_early))
         early_possible = bool(
             np.isfinite(post_start)
@@ -186,6 +192,7 @@ def condition_windows(trials: pd.DataFrame, cfg: AnalysisConfig, floor_ms_by_run
                 "channel": channel,
                 "n_trials": int(n),
                 "n_censored": int(np.count_nonzero(censored)),
+                "n_baseline_contaminated": int(np.count_nonzero(contaminated)),
                 "median_recovery_ms": p50,
                 "q25_recovery_ms": float(p25),
                 "q75_recovery_ms": float(p75),
@@ -229,11 +236,20 @@ def mark_retained(trials: pd.DataFrame, windows: pd.DataFrame, cfg: AnalysisConf
     out["post_start_ms"] = post_start
     out["post_end_ms"] = post_end
     censored = out["censored"].to_numpy(dtype=bool)
-    early = (~censored) & (out["blank_end_ms"].to_numpy() <= post_start)
-    late = (~censored) & (out["blank_end_ms"].to_numpy() < cfg.late_ms[0])
+    contaminated = (
+        out["baseline_contaminated"].to_numpy(dtype=bool)
+        if "baseline_contaminated" in out
+        else np.zeros(len(out), dtype=bool)
+    )
+    usable = (~censored) & (~contaminated)
+    early = usable & (out["blank_end_ms"].to_numpy() <= post_start)
+    late = usable & (out["blank_end_ms"].to_numpy() < cfg.late_ms[0])
     out["retained_early"] = early
     out["retained_late"] = late
-    reasons = np.where(censored, "censored", np.where(early, "", "recovery_after_post_start"))
+    reasons = np.where(
+        censored, "censored",
+        np.where(contaminated, "baseline_contaminated", np.where(early, "", "recovery_after_post_start")),
+    )
     out["reject_reason"] = reasons
     return out
 

@@ -129,6 +129,7 @@ def run_diagnosis(
             sel.included = [v for v in sel.included if any(tok.lower() in (v.run_id + " " + Path(v.run_folder).name).lower() for tok in run_filter)]
         _log(result, sel.summary(), quiet)
         selections.append(sel)
+    result.metadata["open_channels_excluded"] = {s.session: {c: z for c, z in s.open_channels.items()} for s in selections}
 
     # ---- Test A -----------------------------------------------------------------------------
     table_a = settings_table(selections)
@@ -289,38 +290,62 @@ def _verdict(pooled, tau_dsp_ms, inv, same_sign_frac, obs_in_synth, synth_range,
                 group_dev[grouping] = float(np.nanmax(np.abs(sub["median_tau_ms"] / pooled_med - 1.0)) * 100.0)
     invariant = all(v <= 20.0 for v in group_dev.values()) if group_dev else invariant_regression
     live_dead_same = None
+    dead_shorter = None
+    dead_ratio = float("nan")
     if table_d is not None and not table_d.empty:
         rec = table_d[table_d["metric"] == "recovery_ms"]
-        live_dead_same = bool(rec["indistinguishable_95ci"].mean() >= 0.5) if len(rec) else None
-    collapse = bool(np.isfinite(f1_frac) and f1_frac <= 0.25) or bool(np.isfinite(f2_frac) and f2_frac <= 0.25)
+        if len(rec):
+            live_dead_same = bool(rec["indistinguishable_95ci"].mean() >= 0.5)
+            dead_ratio = float(np.nanmedian(rec["ratio_dead_over_live"]))
+            dead_shorter = bool(np.isfinite(dead_ratio) and dead_ratio < 0.8 and (rec["diff_ci_high"] < 0).mean() >= 0.5)
+    collapse_f1 = bool(np.isfinite(f1_frac) and f1_frac <= 0.25)
+    collapse_f2 = bool(np.isfinite(f2_frac) and f2_frac <= 0.25)
+    collapse = collapse_f1 or collapse_f2
     dsp_signature = same_sign_frac < 0.5  # DSP/HP overshoot after a brief pulse is opposite-sign
+    f2_lengthens = bool(np.isfinite(f2_frac) and f2_frac > 1.1)
+    amp_dependent = bool(shifts.get("log_current") is not None and abs(shifts["log_current"]) > 20) or bool(group_dev.get("session_amplitude_uA", 0.0) > 20.0)
+    z_dependent = bool(group_dev.get("impedance_tertile", 0.0) > 20.0)
     evidence = {
         "tau_fit_ratio_to_dsp": ratio, "tau_within_20pct": tau_match, "covariate_pct_shifts_over_range (regression, collinear covariates -- supplementary)": shifts, "max_group_median_deviation_pct": group_dev, "tau_invariant": invariant,
         "same_sign_tail_fraction": same_sign_frac, "opposite_sign_tail_dominates (DSP signature)": dsp_signature,
         "observed_inside_synthetic_range": obs_in_synth, "synthetic_range_ms": synth_range, "observed_median_ms": obs_med,
-        "live_dead_indistinguishable": live_dead_same,
+        "live_dead_indistinguishable": live_dead_same, "dead_over_live_recovery_ratio": dead_ratio, "dead_shorter_than_live": dead_shorter,
         "F1_fraction_of_before": f1_frac, "F2_fraction_of_before": f2_frac, "F2_nonrailed_median_ms": f2_nonrailed, "recovery_collapses_after_removal": collapse,
+        "F2_lengthens_recovery (DSP shortens an analog tail)": f2_lengthens, "amplitude_dependent": amp_dependent, "impedance_dependent": z_dependent,
     }
-    filter_frac = float(np.clip(1.0 - np.nanmin([f1_frac, f2_frac]), 0.0, 1.0)) if np.isfinite(f1_frac) or np.isfinite(f2_frac) else float("nan")
-    if tau_match and invariant and dsp_signature and collapse:
+    # Fractions: what the fitted exponential tail accounts for (whatever its origin), and what the DSP itself
+    # accounts for (F2 inverse; negative = the DSP is SHORTENING the recorded tail).
+    tail_frac = float(1.0 - f1_frac) if np.isfinite(f1_frac) else float("nan")
+    dsp_frac = float(1.0 - f2_frac) if np.isfinite(f2_frac) else float("nan")
+    evidence["exponential_tail_fraction_of_recovery (F1)"] = tail_frac
+    evidence["dsp_attributable_fraction_of_recovery (F2; negative = DSP shortens)"] = dsp_frac
+    if tau_match and invariant and dsp_signature and collapse_f1:
         label = "FILTER-DOMINATED"
-    elif tau_match and (invariant or obs_in_synth) and not dsp_signature:
-        label = "MIXED (analog front-end offset shaped by the DSP high-pass)"
-    elif shifts.get("log_impedance") is not None and abs(shifts["log_impedance"]) > 20 and abs(shifts.get("log_current", 0.0)) <= 20:
+    elif dsp_signature and tau_match and not invariant:
+        label = "MIXED (DSP-shaped opposite-sign tail, but tau varies with condition)"
+    elif not dsp_signature and (dead_shorter is True):
+        label = "MIXED (same-sign tail; post-mortem shorter -> a biological contribution exists)"
+    elif not dsp_signature:
+        qual = []
+        if amp_dependent:
+            qual.append("current-dependent")
+        if z_dependent:
+            qual.append("impedance-dependent")
+        if f2_lengthens:
+            qual.append("DSP shortens rather than causes it")
+        label = "ELECTRODE / ANALOG FRONT-END-DOMINATED (same-sign tail" + (", " + ", ".join(qual) if qual else "") + ")"
+    elif z_dependent and not amp_dependent:
         label = "ELECTRODE-DOMINATED"
-    elif (shifts.get("log_current") is not None and abs(shifts["log_current"]) > 20) or (live_dead_same is False):
-        label = "TISSUE/BIOLOGY-DOMINATED (or current-dependent electrode)"
     else:
         label = "MIXED"
     text = (
         f"{label}: tau_fit/tau_DSP = {ratio:.2f} (within 20%: {tau_match}); max group-median deviation "
         + ", ".join(f"{k} {v:.0f}%" for k, v in group_dev.items())
         + f"; same-sign tails {same_sign_frac:.0%}; observed median {obs_med:.0f} ms vs synthetic rail-level {synth_range[0]:.0f}-{synth_range[1]:.0f} ms"
-        + (f"; live vs dead indistinguishable: {live_dead_same}" if live_dead_same is not None else "; no post-mortem data")
+        + (f"; live vs dead: dead/live recovery {dead_ratio:.2f}, indistinguishable {live_dead_same}, dead shorter {dead_shorter}" if live_dead_same is not None else "; no post-mortem data")
         + f"; recovery after removal F1 {f1_frac:.0%} / F2 {f2_frac:.0%} of before"
-        + (f"; estimated filter fraction ~{filter_frac:.0%}" if np.isfinite(filter_frac) else "")
+        + (f"; exponential-tail fraction {tail_frac:.0%}, DSP-attributable fraction {dsp_frac:+.0%}" if np.isfinite(tail_frac) else "")
     )
-    evidence["estimated_filter_fraction"] = filter_frac
     return text, evidence
 
 

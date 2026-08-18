@@ -1,9 +1,9 @@
 # Stimulation Analysis Agent Handoff
 
-Last reviewed: 2026-08-17  
+Last reviewed: 2026-08-18  
 Workspace: `/Users/jf/Claude/Matlab code`  
-Git snapshot at handoff: branch `refactor/extract-ui-blocks`, after the
-Functions 0/1/2/4 extraction  
+Git snapshot at handoff: branch `worktree-fn3-blank-space` (Function 6 /
+`stim_analysis` package added 2026-08-18; the same files are applied to `main`)  
 Worktree status before creating this handoff: clean
 
 ## Purpose
@@ -44,10 +44,13 @@ The notebook currently contains Functions 0 through 5:
 | 3 | Plot stim-triggered response events, three events per row | `wideband_function3_ui.py` | `plot_rhs_stim_triggered_events.py` |
 | 4 | Plot recorded response only, without requiring or showing stim current | `wideband_function4_ui.py` | `plot_rhs_filtered_wideband.py` |
 | 5 | Pre/post neuromodulation or stim-triggered band-power analysis | `wideband_function5_power_ui.py` | `plot_rhs_power_analysis.py` |
+| 6 | Session-level stimulation analysis (Spec v2): validation, artifact recovery gating, secondary analyses over every run of a session | `wideband_function6_session_ui.py` | `stim_analysis/` package + `run_stim_analysis.py` CLI |
 
 Shared across the UI modules: `wideband_ui_common.py` (widget factories, preview
-rendering, atomic saves, error markup) and `rhs_stim.py` (channel reading and
-stim-channel resolution).
+rendering, atomic saves, error markup), `rhs_stim.py` (channel reading and
+stim-channel resolution) and `rhs_reader.py` (multi-channel RHS readers: the
+batch runner's reader moved here verbatim, plus a fast structured-dtype reader
+used by `stim_analysis`).
 
 `wideband_main_ui.py` is the notebook launcher layer. Its public functions are:
 
@@ -58,6 +61,7 @@ show_function2_bandpass_filtered(globals())
 show_function3_stim_triggered_events(globals())
 show_function4_recorded_response_only(globals())
 show_function5_power_analysis(globals())
+show_function6_session_analysis(globals())
 ```
 
 `wideband_main_ui.py` contains no function-specific code. It exists to **own
@@ -97,6 +101,8 @@ Three things worth knowing:
 
 - Loading a **new data file needs no reload** -- that is just pasting a path into
   the widget. Reload is only for code edits.
+- Package modules use dotted names in the chain (`stim_analysis.config`, ...);
+  `check_reload_chain()` maps them to `stim_analysis/config.py`.
 - Adding a new helper module means adding it to `_RELOAD_CHAIN` **in the right
   position**. Getting this wrong is not a silent staleness bug: reloading a
   module re-executes its `from X import y` lines, so if `X` has not been
@@ -512,6 +518,142 @@ power_event_...
 
 Nothing is written during preview generation.
 
+## Function 6: Session Stimulation Analysis (Spec v2)
+
+Active UI implementation: `wideband_function6_session_ui.py`. Numerics:
+`stim_analysis/` package. Headless CLI: `run_stim_analysis.py`. Spec: the
+user's "Endovascular Stimulation -- Analysis Spec v2" (session 260817).
+
+Unlike Functions 1-5 this operates on a **session parent folder** (one
+sub-folder per RHS run) and answers one question first: how much of each record
+is usable and what analysis window survives the stimulation artifact. Only then
+does it run secondary analyses on the conditions that survive.
+
+### Package layout
+
+```text
+stim_analysis/config.py     AnalysisConfig: every parameter and every fixed plot
+                            limit; config_from_text_fields() is the ONLY place
+                            that parses CLI/widget text (Layering Rule)
+stim_analysis/load_rhs.py   folder-name + settings.xml parsers, load_run,
+                            stim events from the decoded marker (per pulse:
+                            amplitude, width, polarity, compliance bit, amp
+                            settle), header impedance, contact geometry
+stim_analysis/validate.py   commanded (NumberOfStimPulses x trains) vs detected
+                            pulses, compliance from data, empirical rail per
+                            channel, block assignment, exclusions, table 1
+stim_analysis/epoch.py      epoch -> blank -> filter primitives (padded
+                            extraction, baseline stats, blank windows, SOS
+                            design identical to bandpass_filter_wideband)
+stim_analysis/recovery.py   per-trial recovery time / rail duration on RAW
+                            epochs; per-condition windows (P90 rule); verdicts
+stim_analysis/metrics.py    per-trial band power / RMS on blanked-then-filtered
+                            epochs; paired dB keyed by event id; noise floor
+stim_analysis/stats.py      vectorised bootstrap CIs, paired_frame (inner join),
+                            log-normal checks, fake onsets, MixedLM / OLS model
+stim_analysis/models.py     linear / through-origin / sigmoid fits, AIC/BIC,
+                            stratified I50 bootstrap
+stim_analysis/figures.py    fixed-scale figures with self-describing captions
+stim_analysis/secondary.py  stage "all": comparisons (a) (b) (c), drift, charge,
+                            spatial, compliance, channel model, shuffle, figs 4-8
+stim_analysis/pipeline.py   run_session() -- never writes -- and
+                            render_outputs()/write_outputs() (paths decided here)
+stim_analysis/selftest.py   synthetic-data checks (writes only under a temp dir)
+```
+
+Rules: the package never imports ipywidgets; matplotlib Agg; results and
+output paths come back from the pipeline; ASCII in source and labels.
+
+### Stages and gating
+
+1. **validate** -- every run below the parent is loaded and validated:
+   sample rate from the header (30 kHz for session 260817, not the spec's
+   20 kHz), commanded vs detected pulses, compliance (pulse-count drop or the
+   RHS compliance bit), empirical rail level and % railed per channel, metadata
+   cross-checks (data wins over settings.xml over folder name), block
+   assignment (baseline / block1 amplitude ladder / block2 width sweep /
+   block3 paired pulses / other), exclusions. `table01_validation.csv` exists
+   before any analysis; the CLI writes it immediately; a run that fails does
+   not silently proceed (status `error`, listed).
+2. **recovery** (spec section 4, the gating analysis) -- raw epochs
+   (-600..+900 ms, +/-500 ms pad), per trial: `threshold = max(3 x baseline SD,
+   100 uV)`, `recovery = last t > 0 above threshold before a >= 20 ms quiet
+   run`, rail duration, censoring, baseline contamination by the previous
+   pulse. Per channel x run: quantiles, `post_start = max(P90(recovery) +
+   5 ms, hardware floor)` (`recovery_quantile` = 0.5 reproduces a median rule),
+   retained trials, verdict `early_ok` / `late_only` (median > 50 ms) /
+   `unusable`. Figures 1, 2, 2b, 3, 3b, S5 and tables 1-3.
+3. **all** -- epoch -> blank -> filter -> per-trial metrics; comparisons
+   (a) within-epoch, (b) block vs no-stim baseline, (c) across amplitude;
+   first-vs-last drift; charge dependence; spatial decay; compliance
+   characterisation; amplitude-response models with impedance covariate
+   (statsmodels MixedLM, channel random effect); log-normal checks; shuffle
+   control; figures 4-8 and S1-S4; metadata JSON with the exact filter designs.
+
+### Design decisions that go beyond the letter of the spec (all stated in captions/metadata)
+
+- **Equal-length window pairing.** The shuffle-null self-test caught a
+  -0.4 dB bias on pure noise when a 450 ms baseline is compared with a 300 ms
+  post window (different degrees of freedom of the log-power estimate). Every
+  post window is paired with an equal-length slice at the END of the baseline.
+- **Neighbouring pulses inside the filter pad are blanked** through their own
+  measured recovery; at a 1 s IPI the previous pulse sits in the -1100 ms pad
+  and the next in the +1400 ms pad, and filtfilt would otherwise ring them
+  into the baseline / late windows.
+- **`baseline_contaminated`** (previous pulse's recovery reaches into
+  -500..-50 ms) is a rejection reason; the trial is dropped from both windows.
+- **Shuffle control** has two modes: within-run fake onsets in clean
+  inter-pulse intervals (starves at a 1 s IPI because a 1.5 s epoch almost
+  always overlaps a real pulse) and no-stim-run pseudo-onsets (jittered).
+  Figure 8 uses within-run only when every condition keeps >= `min_trials`
+  fake epochs, else the baseline-run variant, and says which.
+- **High-pass < 1 Hz is rejected** by `AnalysisConfig.validate()`.
+- Figure 3 is truly raw (no baseline subtraction) so rail lines are exact;
+  the zoom variant marks off-scale samples in red instead of clipping.
+
+### Data notes for session 260817
+
+- Runs are under `.../SynologyDrive-Endovascular/Jill/20260817 re stim Noah 1/`
+  (already renamed by Function 0), NOT `Noah/Noah_260817_surgery/`, which holds
+  RHD recordings, tifs and Intan impedance CSVs that list A-024..A-031 as
+  disabled/open (unusable). Impedances come from the RHS header (Port A,
+  29-256 kOhm; A-031 is a 3.8 MOhm outlier).
+- `settings.xml`: `NumberOfStimPulses=50`, `PulseTrainPeriod=999990 us`,
+  `RefractoryPeriod=1000 us` -- the folder-name "999ms RP" is the inter-event
+  interval, as the spec warns. `SaveDCAmplifierWaveforms=False`, so the rail is
+  found empirically (ADC full scale +/-6390 uV; the "+/-2000 uV rail" was a
+  plot limit). `step2_*` folders contain `step1_*.rhs` files -- glob, never
+  trust stems. `step 3_260817_142832` has a truncated .rhs (reported as error).
+- Full session (18 runs, 11 included) runs in about 2 minutes with
+  bootstrap 1000. Result: no channel x amplitude condition reaches `early_ok`;
+  every cell is `late_only` or `unusable` (median recovery 64-490 ms), i.e.
+  the spec's section 12 outcome.
+
+### Outputs
+
+Bundle in `<parent>/stim_analysis/` (or `--output-dir`): `table01_validation.csv`
+(+ `_rail_long`), `table02_impedance_per_run.csv`, `table03_recovery_summary.csv`,
+per-trial CSVs (`trials_recovery`, `trials_bandpower`, `trials_response_amplitude`,
+`trials_paired_db`), `comparisons_*.csv`, `models_amplitude_response.csv`,
+`channel_model.csv`, `lognormal_checks.csv`, `noise_floor.csv`,
+`shuffle_control.csv`, `fig01`..`fig08` + `figS1`..`figS5` PNGs,
+`figures_index.csv`, `stim_analysis_metadata.json`, `run_log.txt`. Per run:
+`stim_analysis_<run_id>_{validation,rail,recovery_trials,condition_windows}.csv`
+next to the .rhs files (untick the box / `--no-per-run` to skip).
+
+### Controls (Function 6)
+
+Session folder; Baseline run / Stim channel (`auto`); Stage; HP/LP/order,
+zero-phase, Pad; Epoch / Baseline / Late (ms); k x SD, Floor, Quiet, Recovery
+quantile, Post length, Blank margin; Bands (Function 5 grammar); Bootstrap,
+Seed, shuffle; Trace uA (figure 3 amplitudes); Impedance CSV (optional
+override); Output folder; per-run CSV checkbox. **Validate** and **Generate
+Preview** write nothing; **Save Bundle** writes atomically.
+
+CLI equivalents: `/usr/local/bin/python3 run_stim_analysis.py "<parent>"
+[--stage validate|recovery|all] [--runs SUBSTR ...] [--bootstrap N]
+[--output-dir DIR] [--no-per-run] [--dry-run]`.
+
 ## Save and UI Invariants
 
 Preserve these behaviors in future edits:
@@ -616,7 +758,20 @@ Note the data under `SynologyDrive-Endovascular` are **dataless cloud
 placeholders** (`stat -f %b` reports 0 blocks). Reading one triggers a NAS
 download, so prefer a small session for smoke tests.
 
-There is still no automated test suite.
+The `stim_analysis` package has a synthetic-data self-test (no recordings
+needed, writes only under a temp dir):
+
+```bash
+/usr/local/bin/python3 -m stim_analysis.selftest
+```
+
+It writes an RHS file that mirrors `_read_header` field for field and checks
+reader equivalence, event/compliance detection, rail levels, analytic recovery
+times, filter-design equality, paired dropping, the shuffle null (equal vs
+unequal windows), models, the mixed model, and a whole synthetic session
+through `run_session` (75 checks, ~15 s). The Function 6 widget tree was also
+driven headlessly (Validate/Preview write nothing, Save writes the bundle).
+The rest of the code base still has no automated tests.
 
 ## Current Research Interpretation
 
@@ -684,6 +839,16 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
 5. Full-session multichannel reads can consume substantial RAM because channels
    are loaded separately. Future optimization could add shared-file parsing or
    chunked power computation without changing the UI contract.
+7. Function 3 still filters the continuous trace before epoching (spec v2
+   pitfall 1) and lets a 0.1 Hz high-pass through; it now shows a warning when
+   the high-pass is below 1 Hz and annotates samples hidden by the amplitude
+   window. Re-ordering it to epoch -> filter changes every F3 PNG and the
+   batch byte-compare baseline, so it was deliberately left as a follow-up;
+   Function 6 is the spec-conforming path.
+8. Function 5's event mode compares a 450 ms baseline with a 500 ms post
+   window; log-power estimates of unequal length carry a small mean-dB bias on
+   noise (see the equal-length pairing in Function 6). Not changed, to keep
+   its outputs stable.
 6. The hardcoded default paths in launcher helpers are only initial text-box
    seeds. A future cleanup could centralize defaults, but arbitrary pasted paths
    must remain supported.
@@ -706,6 +871,9 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
    helpers in `wideband_ui_common.py`.
 7. Validate with `py_compile`, notebook JSON parsing, and the byte-comparison
    smoke test described under Verification Completed.
+9. For Function 6, keep all parsing in `stim_analysis/config.py` and all output
+   paths in `stim_analysis/pipeline.render_outputs`; run the self-test after any
+   change and, for real data, `run_stim_analysis.py --stage validate` first.
 8. Prefer editing one function's UI module over touching `wideband_ui_common.py`;
    a change there affects all six.
 

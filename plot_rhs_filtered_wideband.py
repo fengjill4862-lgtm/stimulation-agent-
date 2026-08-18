@@ -222,6 +222,27 @@ def format_bandpass_status(band_hz: tuple[float, float] | None) -> str:
     return f"applying {band_hz[0]:g}-{band_hz[1]:g} Hz bandpass"
 
 
+def bandpass_warning(band_hz: tuple[float, float] | None) -> str | None:
+    """Warn when a sub-1 Hz high-pass is applied to the continuous trace.
+
+    A 0.1 Hz high-pass has a ~1.6 s time constant. Applied to a trace that
+    saturates at every stim pulse it rings for seconds, and zero-phase
+    filtering spreads that ringing backwards into the pre-stim baseline; the
+    slow exponential recoveries in stim-triggered plots are then filter
+    artifact, not physiology. Use >= 1 Hz for stim epochs, or the session
+    analysis (Function 6), which epochs and blanks before filtering.
+    """
+    if band_hz is None or band_hz[0] >= 1.0:
+        return None
+    tau_s = 1.0 / (2.0 * 3.141592653589793 * band_hz[0])
+    return (
+        f"High-pass {band_hz[0]:g} Hz has a ~{tau_s:.1f} s time constant and is applied to the "
+        "continuous trace here; saturating stim artifact rings through it into the "
+        "post-stim window and (zero-phase) into the baseline. Use >= 1 Hz for stim "
+        "epochs, or Function 6 which epochs and blanks before filtering."
+    )
+
+
 def plot_filtered_channels(
     channel_data: Sequence[tuple[str, np.ndarray]],
     sample_rate_hz: float,

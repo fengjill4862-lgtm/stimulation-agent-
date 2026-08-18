@@ -1,0 +1,116 @@
+# Intan RHS stimulation analysis (notebook agent)
+
+Python/Jupyter workflow for multichannel Intan RHS recordings with electrical
+stimulation. The user interface is `Plot_All_Channel_Data_Wideband.ipynb`;
+the implementation lives in the `.py` files next to it. Full technical detail
+and history: `STIM_AGENT_HANDOFF.md`. (`agent.md` describes the separate MATLAB
+spike-sorting workflow.)
+
+## Working agreements
+
+- **Do not run data analysis on newly revised code without asking the user
+  first.** After a code change, verify with the synthetic self-test
+  (`/usr/local/bin/python3 -m stim_analysis.selftest`), `py_compile`, the
+  reload-chain check and scratch copies of a small session. Running any
+  function, the CLI or the batch runner on real recordings -- and writing into
+  data folders -- is the user's call.
+- Preview never writes. Save buttons write only the preview they hold, into
+  the selected data folder, atomically (temp file + replace).
+- Interpreter: `/usr/local/bin/python3` (3.12) and the `py312-rhs` kernel;
+  bare `python3` is anaconda 3.9 and must not be used.
+- Layering: notebook -> `wideband_main_ui.py` (ordered reload only) ->
+  `wideband_functionN_ui.py` (widgets only) -> `plot_rhs_*` / `rhs_*` /
+  `stim_analysis/` (parsing, numerics, output paths).
+
+## Functions
+
+| Function | Purpose | UI module | Numerics |
+| --- | --- | --- | --- |
+| 0 | Rename RHS folders from the recorded stim waveform | `wideband_function0_ui.py` | `rename_rhs_folders_by_stim_waveform.py` |
+| 1 | Raw wideband traces | `wideband_function1_ui.py` | `plot_rhs_raw_wideband_with_stim_legend.py` |
+| 2 | Bandpass + amplitude window | `wideband_function2_ui.py` | `plot_rhs_filtered_wideband.py` |
+| 3 | Stim-triggered event grid (quick look) | `wideband_function3_ui.py` | `plot_rhs_stim_triggered_events.py` |
+| 4 | Recorded response only | `wideband_function4_ui.py` | `plot_rhs_filtered_wideband.py` |
+| 5 | Pre/post and event-locked band power | `wideband_function5_power_ui.py` | `plot_rhs_power_analysis.py` |
+| 6 | Session-level stimulation analysis (Spec v2) | `wideband_function6_session_ui.py` | `stim_analysis/` + `run_stim_analysis.py` |
+
+Shared: `wideband_ui_common.py` (widgets, previews, atomic saves),
+`rhs_stim.py` (channel reading, stim-channel resolution), `rhs_reader.py`
+(multi-channel RHS readers), `rhs_naming.py`, `rhs_files.py`.
+Batch: `batch_run_wideband_main_ui.py` runs Functions 1-5 over every run
+below a parent folder.
+
+## Function 6: session-level stimulation analysis (Analysis Spec v2)
+
+Operates on a **session parent folder** (one sub-folder per RHS run) and
+answers the gating question first -- how much of each record is usable and
+what analysis window survives the stimulation artifact -- then runs the
+secondary analyses on the conditions that survive.
+
+Stages (each one gates the next):
+
+1. **validate** -- every run: sample rate from the header, pulses commanded
+   (`settings.xml`: `NumberOfStimPulses` x trains) vs detected on the stim
+   marker, compliance from data (pulse-count drop or the RHS compliance bit),
+   empirical rail level and % samples railed per channel, metadata
+   cross-checks (data wins over `settings.xml` over folder name), block
+   assignment (baseline / block1 amplitude ladder / block2 width sweep /
+   block3 paired pulses), exclusions. `table01_validation.csv` exists before
+   any analysis runs; a broken run is listed as `error`, never skipped silently.
+2. **recovery** (spec section 4) -- raw epochs (-600..+900 ms, padded), per
+   trial: `threshold = max(3 x baseline SD, 100 uV)`, recovery = last sample
+   above threshold before a >= 20 ms quiet run, rail duration, censoring,
+   baseline contamination by the previous pulse. Per channel x amplitude: the
+   derived post-window start (P90 of recovery + margin, configurable), retained
+   trials, verdict `early_ok` / `late_only` / `unusable`. Figures 1-3, tables
+   1-3.
+3. **all** -- epoch -> blank -> filter (neighbouring pulses inside the filter
+   pad blanked too) -> per-trial band power and RMS; comparisons (a) within
+   epoch, (b) block vs no-stim baseline, (c) across amplitude; first-vs-last
+   drift; charge dependence; spatial decay; compliance characterisation;
+   linear vs through-origin vs sigmoid fits with AIC/BIC and I50 bootstrap;
+   channel random-effect model with impedance covariate; log-normal checks;
+   shuffle control; figures 4-8 and S1-S4; metadata JSON with the exact
+   filter designs.
+
+Rules baked in: the continuous trace is never filtered; high-pass >= 1 Hz;
+fixed axis and colour limits everywhere; every caption states n trials
+retained/rejected, blanking window and filter; baseline and post windows are
+paired by event id and cropped to equal length (unequal lengths bias mean dB
+on pure noise); the shuffle control must come out null.
+
+How to run:
+
+```bash
+# notebook: Block 6 cell -> Validate -> Generate Preview -> Save Bundle
+/usr/local/bin/python3 run_stim_analysis.py "<session folder>" --stage validate
+/usr/local/bin/python3 run_stim_analysis.py "<session folder>" --stage recovery
+/usr/local/bin/python3 run_stim_analysis.py "<session folder>" --stage all [--bootstrap N] [--no-per-run] [--dry-run]
+/usr/local/bin/python3 -m stim_analysis.selftest        # synthetic-data checks, writes nothing real
+```
+
+Outputs: `<session folder>/stim_analysis/` (tables, figures, per-trial CSVs,
+`stim_analysis_metadata.json`, `run_log.txt`) plus per-run CSVs next to each
+run's `.rhs` files (untick the box / `--no-per-run` to skip).
+
+Package layout: `stim_analysis/{config, load_rhs, validate, epoch, recovery,
+metrics, stats, models, figures, secondary, pipeline, selftest}.py`. All text
+parsing lives in `config.py`; all output paths in `pipeline.render_outputs`;
+`pipeline.run_session` never writes.
+
+## Session 260817 (as analysed 2026-08-18)
+
+18 runs validated, 11 included (500/800 us and all Block 3 excluded for
+compliance, one truncated `.rhs` reported), baseline auto-selected. No channel
+x amplitude condition reaches `early_ok`: median recovery is 64-490 ms
+everywhere, including 10 uA, so every cell is `late_only` or `unusable`; the
+baseline-run shuffle null is clean. That is the spec's section 12 outcome:
+this electrode/impedance configuration cannot support evoked-potential
+measurement; late-window and block-level measures are what remain. Outputs
+were written to `.../Jill/20260817 re stim Noah 1/stim_analysis/`.
+
+## Environment
+
+`/usr/local/bin/python3` 3.12 with numpy, scipy, matplotlib, pandas,
+statsmodels, ipywidgets 8; select the `py312-rhs` kernel in VS Code or
+JupyterLab (`/usr/local/bin/python3 -m jupyterlab`).

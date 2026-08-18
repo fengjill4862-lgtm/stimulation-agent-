@@ -855,6 +855,11 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
 
 ## Instructions for the Next Codex Agent
 
+0. **Do not run data analysis on newly revised code without asking the user
+   first.** Verify code changes with the synthetic self-test, `py_compile`, the
+   reload-chain check and scratch copies; running any function, the CLI or the
+   batch runner on real recordings (and writing into data folders) is the
+   user's call. See also `README.md`.
 1. Read this file and `Plot_All_Channel_Data_Wideband.ipynb` Markdown before
    changing the workflow.
 2. Inspect `git status` first and preserve unrelated user changes.

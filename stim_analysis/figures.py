@@ -600,7 +600,8 @@ def plot_model_fits(
                 ax.plot(grid, np.clip(sigmoid(grid, r["sigmoid_amax"], r["sigmoid_i50"], r["sigmoid_k"]), *ylim), color="#d62728", lw=1.0, label=f"sigmoid dAIC {r.get('delta_aic_sigmoid', np.nan):.1f}")
                 ax.text(0.02, 0.96, f"I50 {r['sigmoid_i50']:.0f} uA [{r['i50_ci_low']:.0f}, {r['i50_ci_high']:.0f}]", transform=ax.transAxes, fontsize=6.5, va="top")
             ax.text(0.02, 0.86, f"preferred: {r.get('preferred', '')}" + ("  (artifact-like)" if bool(r.get("artifact_candidate", False)) else ""), transform=ax.transAxes, fontsize=6.5, va="top")
-            ax.legend(fontsize=5.5, frameon=False, loc="lower right")
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize=5.5, frameon=False, loc="lower right")
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlim(cfg.lim_amplitude_uA)

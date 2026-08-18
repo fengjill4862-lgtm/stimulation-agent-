@@ -43,6 +43,18 @@ _RELOAD_CHAIN = (
     "rename_rhs_folders_by_stim_waveform",
     "rhs_stim",
     "wideband_ui_common",
+    # stim_analysis package (Function 6), leaves first: config -> data -> stages.
+    "stim_analysis.config",
+    "stim_analysis.load_rhs",
+    "stim_analysis.validate",
+    "stim_analysis.epoch",
+    "stim_analysis.recovery",
+    "stim_analysis.metrics",
+    "stim_analysis.stats",
+    "stim_analysis.models",
+    "stim_analysis.figures",
+    "stim_analysis.secondary",
+    "stim_analysis.pipeline",
 )
 
 _LAUNCHERS = {
@@ -52,6 +64,7 @@ _LAUNCHERS = {
     "show_function3_stim_triggered_events": "wideband_function3_ui",
     "show_function4_recorded_response_only": "wideband_function4_ui",
     "show_function5_power_analysis": "wideband_function5_power_ui",
+    "show_function6_session_analysis": "wideband_function6_session_ui",
 }
 
 
@@ -102,6 +115,11 @@ def show_function5_power_analysis(namespace: MutableMapping[str, object] | None 
     _launch("show_function5_power_analysis", namespace)
 
 
+def show_function6_session_analysis(namespace: MutableMapping[str, object] | None = None) -> None:
+    """Launch Function 6: Session-level stimulation analysis (Spec v2)."""
+    _launch("show_function6_session_analysis", namespace)
+
+
 __all__ = [
     "show_function0_rename_rhs_folders",
     "show_function1_raw_wideband",
@@ -109,6 +127,7 @@ __all__ = [
     "show_function3_stim_triggered_events",
     "show_function4_recorded_response_only",
     "show_function5_power_analysis",
+    "show_function6_session_analysis",
 ]
 
 

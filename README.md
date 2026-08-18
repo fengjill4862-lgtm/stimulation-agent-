@@ -114,3 +114,24 @@ were written to `.../Jill/20260817 re stim Noah 1/stim_analysis/`.
 `/usr/local/bin/python3` 3.12 with numpy, scipy, matplotlib, pandas,
 statsmodels, ipywidgets 8; select the `py312-rhs` kernel in VS Code or
 JupyterLab (`/usr/local/bin/python3 -m jupyterlab`).
+
+## Filter diagnosis (`filter_diag/`)
+
+Tests whether the 100-500 ms artifact "recovery" is the step response of the
+Intan DSP high-pass (1.166 Hz, tau = 2^12/fs = 136.5 ms at 30 kHz) combined with
+ADC railing, per the Filter Diagnosis Spec: A settings table, B exponential tail
+fits and tau invariance, C synthetic step through the instrument chain (rail
+modes freeze / track / spec) with the unchanged recovery algorithm, D live vs
+post-mortem, E additive decomposition, F fit-and-subtract and inverse-DSP
+removal, one-line verdict.
+
+```bash
+/usr/local/bin/python3 -m filter_diag.selftest        # synthetic checks (no data)
+/usr/local/bin/python3 -m filter_diag.run_all --dry-run   # both sessions, writes nothing
+/usr/local/bin/python3 -m filter_diag.run_all             # writes <live>/filter_diagnosis/
+```
+
+Defaults: live `~/SynologyDrive/Research/Stimulation/20260817 re stim Noah 1`,
+dead `.../20260816 re stim Yun dead rat`; compliance-flagged, paired-pulse and
+no-stim runs excluded; A-031 excluded; stim contacts reported separately. Do
+not run it on recordings without asking (working agreement above).

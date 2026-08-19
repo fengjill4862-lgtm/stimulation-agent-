@@ -73,13 +73,17 @@ def write_synthetic_rhs(
     impedances_ohms: list[float],
     stim_step_uA: float = 2.0,
     with_dig_in: bool = True,
+    dsp_enabled: bool = True,
+    dsp_cutoff_hz: float = 1.0,
+    lower_bw_hz: float = 0.1,
+    upper_bw_hz: float = 7500.0,
 ) -> None:
     n_amp, n_samples = amp_codes.shape
     assert n_samples % 128 == 0, "synthetic data must be a whole number of 128-sample blocks"
     n_blocks = n_samples // 128
     parts: list[bytes] = [struct.pack("<I", RHS_MAGIC_NUMBER), struct.pack("<hh", 3, 3), struct.pack("<f", sample_rate_hz)]
-    parts.append(struct.pack("<hffff", 1, 1.0, 0.1, 1000.0, 7500.0))  # dsp enabled + actual bws
-    parts.append(struct.pack("<ffff", 1.0, 0.1, 1000.0, 7500.0))  # desired bws
+    parts.append(struct.pack("<hffff", 1 if dsp_enabled else 0, dsp_cutoff_hz, lower_bw_hz, 1000.0, upper_bw_hz))  # dsp enabled + actual bws
+    parts.append(struct.pack("<ffff", dsp_cutoff_hz, lower_bw_hz, 1000.0, upper_bw_hz))  # desired bws
     parts.append(struct.pack("<h", 0))  # notch
     parts.append(struct.pack("<ff", 1000.0, 1000.0))  # impedance test freq desired/actual
     parts.append(struct.pack("<hh", 0, 0))  # amp settle mode, charge recovery mode

@@ -1,10 +1,13 @@
 # Bandwidth Sweep Analysis -- Plan (session 20260818 re stim in vitro filter settings)
 
-Written 2026-08-18. Status: **plan only -- nothing has been run on the data and
-no output has been written** (working agreement: revised code does not touch
-real recordings until you say so). Everything below that is stated as a data
-fact was read from the `.rhs` headers / `settings.xml` and a read-only
-`validate_run` pass with the *existing* loader.
+Written 2026-08-18. Status: **implemented as `bw_sweep/` (2026-08-18), not yet
+run on the sweep folder -- no output has been written there** (working
+agreement: revised code does not touch real recordings until you say so).
+Verified with `python3 -m bw_sweep.selftest` (45 synthetic checks) and a run
+on scratch copies of three run folders under the job tmp dir. Section 9 lists
+what the build changed relative to sections 1-7. Everything below that is
+stated as a data fact was read from the `.rhs` headers / `settings.xml` and a
+read-only `validate_run` pass with the *existing* loader.
 
 Question: does stimulation-artifact recovery scale with the amplifier's
 low-frequency time constant (a linear high-pass step response), or is it a
@@ -100,7 +103,7 @@ baseline -500..-50 ms, `centred = raw - baseline_mean` (existing
 |---|---|---|
 | `threshold_uV` | **100.0 for every trial of every run** | `compute_recovery` with `cfg = replace(AnalysisConfig(), threshold_k=0.0, threshold_floor_uV=100.0)` -> `max(0*sd, 100) = 100`; asserted `== 100.0` on every output row |
 | `recovery_ms` | last t > 0 with abs(centred) > 100 uV before >= 20 ms (`quiet_ms`) continuously below; censored at 900 ms | `compute_recovery` (imported, unchanged) |
-| `rail_fs_ms` | post-onset samples with abs(raw) >= 6389.5 uV (ADC code 0 or 65535) x 1000/fs | new, 3 lines |
+| `rail_fs_ms` | post-onset samples with abs(raw) >= 6388.9 uV (ADC code +-32764, the observed saturation) x 1000/fs | new, 3 lines |
 | `rail_emp_ms` | existing empirical rail estimate (`estimate_rail` / `railed_mask`), for cross-check | `compute_recovery(railed=...)` -> `rail_ms` |
 | `peak_uV` | max abs(centred) in 0..5 ms | new: `window_slice(t, 0, 5)` |
 | `exit_ms` | last spec-railed sample after 0, else time of abs peak | `filter_diag.common.rail_exit_ms` (fed the spec rail mask) |
@@ -136,7 +139,7 @@ bw_sweep/
   __init__.py       __version__
   config.py         SweepConfig: fixed threshold cfg (built from AnalysisConfig via
                     dataclasses.replace), arm definitions + expected nominal values,
-                    rail level 6389.5 uV, fit window (2, 800 ms), fit_informative_tau_ms=4,
+                    rail level 6388.9 uV, fit window (2, 800 ms), fit_informative_tau_ms=4,
                     floor_ms, bootstrap_n=1000, seed=0, ALL fixed axis limits (sec. 5)
   load.py           discover_runs(root) -> [SweepRun]: header table, arm assignment
                     (folder prefix analogsweep/DSPsweep/upperanalogbandwidth + header),
@@ -274,3 +277,49 @@ folder). Runtime estimate: 16 runs x 4 ch x 50 epochs, well under a minute.
    (default) or an absolute value in uV?
 4. Notebook Function 7 wrapper wanted, or CLI only (default)?
 5. Go-ahead to implement, then a second go-ahead before running on the data.
+
+Status 2026-08-18: 1, 2 and 4 taken as the defaults; 3 changed (see 9.4);
+implementation go-ahead given; **the run on the data still needs your go**.
+
+## 9. Implementation notes and deviations (2026-08-18)
+
+What the build changed relative to the sections above, and why. All of it is
+in `bw_sweep/config.py` as named parameters.
+
+1. **Rail level is 6388.9 uV, not 6389.5.** The converted data saturate at
+   ADC code +-32764 = +-6388.98 uV (checked on a railed run), so the "+-6389
+   uV rail" is `|raw| >= 6388.9`.
+2. **Epochs are centred on a local pre-pulse window (-50..-5 ms), not on
+   the -500..-50 ms baseline mean.** With a 1 s IPI the recording contacts'
+   tails outlast the interval (sawtooth), so the spec baseline mean sits on
+   the previous tail and turns a censored recovery into a spurious
+   mean-crossing (668 ms instead of >= 900 ms on the scratch copy of the
+   analog 1 Hz run). The spec window still gives `baseline_sd_uV` and
+   `baseline_contaminated`; the spec-centred recovery is kept as
+   `recovery_spec_centred_ms` next to the primary `recovery_ms`, and two
+   drift diagnostics are reported: `baseline_drift_uV` (local mean minus spec
+   mean) and `local_drift_uV` (linear drift of raw across the local window).
+3. **Slope-fit exclusions.** A run is left out of the log-log fit (and drawn
+   hollow with its reason) when its median recovery is censored (>= 850 ms),
+   at the hardware floor (<= floor + 1 ms), or when > 50 % of its trials have
+   |local_drift| > 25 uV (the pre-pulse level is still moving, so a fixed
+   100 uV recovery is not defined). Verdict rule: "~1" if the 95 % CI lies
+   within 1 +- 0.25 or contains 1 (not 0) with width < 1; "flat" if it lies
+   within 0 +- 0.25 or contains 0 (not 1); otherwise "intermediate".
+4. **Recommendation noise rule** is relative to the *reference setting*
+   (analog 0.1 Hz / DSP k = 12 / 7500 Hz -- the in-vivo setting, present in
+   the sweep): noise SD <= 2x its pre-train SD, plus upper >= 300 Hz and
+   < 50 % censored. "2x the sweep minimum" would always force the narrowest
+   upper bandwidth (noise ~ sqrt(BW)).
+5. **Pre-train noise floor** uses [start + 1 s, first pulse - 0.5 s]; when
+   the lead-in is shorter than 1.5 s it uses the last 0.5 s before the gap
+   (past the amplifier's start-up transient). `prestim_seconds` is in table1.
+6. `stim_analysis/selftest.py::write_synthetic_rhs` gained optional
+   bandwidth/DSP keyword arguments (defaults unchanged) so the sweep self-test
+   can write RHS files with Arm A/B/C headers. Nothing else in
+   `stim_analysis/` or `filter_diag/` changed.
+7. Package layout as planned plus `summary.py` (table1 / per-channel table);
+   outputs `table0_settings_per_run`, `table1_summary_per_run`,
+   `table1b_summary_per_run_channel`, `table2_recommendation_pareto`,
+   `trials_per_epoch`, `fig0..fig6`, `captions.txt`, `verdict.txt`,
+   `metadata.json`, `log.txt` under `<root>/bandwidth_sweep/`.

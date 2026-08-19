@@ -135,3 +135,30 @@ Defaults: live `~/SynologyDrive/Research/Stimulation/20260817 re stim Noah 1`,
 dead `.../20260816 re stim Yun dead rat`; compliance-flagged, paired-pulse and
 no-stim runs excluded; A-031 excluded; stim contacts reported separately. Do
 not run it on recordings without asking (working agreement above).
+
+## Bandwidth sweep (`bw_sweep/`)
+
+In vitro PBS sweep of session `20260818 re stim in vitro filter settings`:
+does artifact recovery scale with the amplifier's low-frequency time constant?
+Arm A analog lower cutoff (0.1-300 Hz, DSP off), Arm B DSP cutoff (off, k =
+14/12/10/8/5), Arm C analog upper cutoff (7500-300 Hz). Arms are assigned from
+the RHS headers, so the two shared recordings (0.1 Hz/DSP off = Arm A + Arm B
+"off"; 1 Hz/7500 Hz = Arm A + Arm C 7500) and the duplicated 500 Hz run are
+handled explicitly, and a one-knob check per arm is written to table0.
+Recovery uses the unchanged `compute_recovery` with a **fixed 100 uV
+threshold** (`threshold_k = 0`), epochs centred on the local -50..-5 ms
+pre-pulse window (the spec's -500..-50 ms baseline still gives baseline SD; the
+spec-centred recovery is kept as a secondary column). Outputs: fig0-fig6,
+table0/table1/table1b/table2, per-epoch CSV, verdict.txt (one line per arm +
+setting recommendation), metadata.json. Plan and design notes:
+`BANDWIDTH_SWEEP_PLAN.md`.
+
+```bash
+/usr/local/bin/python3 -m bw_sweep.selftest         # synthetic checks (no data)
+/usr/local/bin/python3 -m bw_sweep.run --dry-run    # computes, writes nothing
+/usr/local/bin/python3 -m bw_sweep.run              # writes <root>/bandwidth_sweep/
+```
+
+Default root: `~/SynologyDrive/Research/Stimulation/20260818 re stim in vitro
+filter settings`. Do not run it on recordings without asking (working
+agreement above).

@@ -790,6 +790,19 @@ obvious spike-band activity above 200 Hz. The intended interpretation is:
 - multiple windows from one session improve estimation precision but do not
   increase the biological sample size.
 
+## Bandwidth sweep (`bw_sweep/`, 2026-08-18)
+
+CLI-only package for the in vitro bandwidth sweep (session `20260818 re stim
+in vitro filter settings`); see `BANDWIDTH_SWEEP_PLAN.md` for the plan, the
+data facts, and the implementation notes / deviations. It reuses
+`stim_analysis` (loader, epochs, `compute_recovery` with a fixed 100 uV
+threshold via `threshold_k = 0`, rail estimator) and `filter_diag.common`
+(exponential tail fit, rail exit, bootstrap, DSP k). Verify with
+`python3 -m bw_sweep.selftest` (45 synthetic checks, ~6 s); the real run is
+`python3 -m bw_sweep.run` (working agreement 0 applies). Not wired into the
+notebook; a Function 7 wrapper would be a thin call to
+`bw_sweep.run.run_sweep` + `write_result`.
+
 ## Known Technical Limitations and Good Next Improvements
 
 0. ~~The batch runner and the notebook disagree on Function 3 filenames.~~

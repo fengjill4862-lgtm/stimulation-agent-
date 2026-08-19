@@ -322,7 +322,10 @@ def fig_r2(trials: pd.DataFrame, sweep: SweepSet, cfg: SweepConfig) -> Figure:
 
 
 def fig_noise(per_channel: pd.DataFrame, sweep: SweepSet, cfg: SweepConfig) -> Figure:
-    fig, axes = plt.subplots(1, 3, figsize=(13, 4.8), sharey=True)
+    """Baseline SD (spec window), clean-segment SD (pre-/post-train) and its > 5 Hz component, per channel and setting."""
+    from matplotlib.lines import Line2D
+
+    fig, axes = plt.subplots(1, 3, figsize=(13, 5.0), sharey=True)
     for k, arm in enumerate(("A", "B", "C")):
         ax = axes[k]
         _style_axes(ax)
@@ -330,10 +333,12 @@ def fig_noise(per_channel: pd.DataFrame, sweep: SweepSet, cfg: SweepConfig) -> F
         rows = per_channel[per_channel["arms"].astype(str).str.split("+").apply(lambda p: arm in p)] if not per_channel.empty else per_channel
         channels = sorted(rows["channel"].unique()) if not rows.empty else []
         palette = channel_palette(channels)
+        stim_flags: dict[str, bool] = {}
         for j, channel in enumerate(channels):
             offset = 10 ** (-0.045 + 0.03 * j)
             g = rows[rows["channel"] == channel]
             stim = bool(g["is_stim_contact"].iloc[0]) if not g.empty else False
+            stim_flags[channel] = stim
             for run in runs:
                 r = g[g["run_id"] == run.run_id]
                 if r.empty:
@@ -343,20 +348,31 @@ def fig_noise(per_channel: pd.DataFrame, sweep: SweepSet, cfg: SweepConfig) -> F
                 med = float(np.clip(r["median_baseline_sd_uV"], *cfg.lim_sd_uV))
                 lo, hi = (float(np.clip(r[c], *cfg.lim_sd_uV)) for c in ("baseline_sd_uV_ci_low", "baseline_sd_uV_ci_high"))
                 ax.plot([x, x], [lo, hi], color=palette[channel], lw=1.6, alpha=0.8)
-                ax.scatter([x], [med], s=34, marker="^" if stim else "o", color=palette[channel], edgecolors="k", lw=0.5, zorder=5, label=(f"{channel}{' (stim)' if stim else ''} baseline SD" if run is runs[0] else None))
-                ps = float(r["median_prestim_sd_uV"])
-                if np.isfinite(ps):
-                    ax.scatter([x], [float(np.clip(ps, *cfg.lim_sd_uV))], s=30, marker="x", color=palette[channel], lw=1.0, zorder=6, label=(f"{channel} pre-train SD" if run is runs[0] else None))
+                ax.scatter([x], [med], s=34, marker="^" if stim else "o", color=palette[channel], edgecolors="k", lw=0.5, zorder=5)
+                cs = float(r["median_clean_sd_uV"]) if "median_clean_sd_uV" in r else float("nan")
+                if np.isfinite(cs):
+                    ax.scatter([x], [float(np.clip(cs, *cfg.lim_sd_uV))], s=34, marker="x", color=palette[channel], lw=1.1, zorder=6)
+                hf = float(r["median_clean_sd_gt5hz_uV"]) if "median_clean_sd_gt5hz_uV" in r else float("nan")
+                if np.isfinite(hf):
+                    ax.scatter([x], [float(np.clip(hf, *cfg.lim_sd_uV))], s=30, marker="+", color=palette[channel], lw=1.1, zorder=6)
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlim(*_arm_xlim(cfg, arm))
         ax.set_ylim(*cfg.lim_sd_uV)
         ax.set_xlabel(_arm_xlabel(arm), fontsize=8.5)
         if k == 0:
-            ax.set_ylabel("noise SD (uV): o baseline -500..-50 ms (median, CI), x pre-train", fontsize=8)
+            ax.set_ylabel("noise SD (uV)", fontsize=8.5)
         ax.set_title(f"Arm {arm}: {ARM_BY_NAME[arm].title}", fontsize=8.5)
-        ax.legend(fontsize=5.5, frameon=False, ncol=2)
-    fig.suptitle("Noise floor cost of each setting: baseline SD (may include the previous pulse's tail at long tau) and the clean pre-train SD", fontsize=9)
+        handles = [Line2D([], [], marker="^" if stim_flags[c] else "o", color=palette[c], ls="", markeredgecolor="k", markersize=5, label=f"{c}{' (stim contact)' if stim_flags[c] else ''}") for c in channels]
+        legend1 = ax.legend(handles=handles, fontsize=6, frameon=False, loc="upper left", title="channel", title_fontsize=6)
+        ax.add_artist(legend1)
+        markers = [
+            Line2D([], [], marker="o", color="0.3", ls="", markeredgecolor="k", markersize=5, label="baseline SD, -500..-50 ms (median, 95% CI)"),
+            Line2D([], [], marker="x", color="0.3", ls="", markersize=6, label="clean segment SD (pre-/post-train)"),
+            Line2D([], [], marker="+", color="0.3", ls="", markersize=6, label=f"clean segment SD > {cfg.clean_sd_highpass_hz:g} Hz (broadband noise)"),
+        ]
+        ax.legend(handles=markers, fontsize=6, frameon=False, loc="lower left")
+    fig.suptitle("Noise floor cost of each setting: baseline SD (includes the previous pulse's tail at long tau), the clean stimulation-free segment, and its > 5 Hz component (sub-5 Hz drift is what a low high-pass corner lets through)", fontsize=8.5)
     fig.subplots_adjust(top=0.85, wspace=0.12)
     return fig
 

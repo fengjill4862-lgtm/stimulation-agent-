@@ -86,6 +86,8 @@ class SweepConfig:
     prestim_skip_start_s: float = 1.0
     prestim_gap_before_first_s: float = 0.5
     prestim_min_s: float = 0.5
+    posttrain_gap_s: float = 2.0  # clean-segment fallback: this long after the last pulse to the end of the recording
+    clean_sd_highpass_hz: float = 5.0  # the > 5 Hz SD of the clean segment separates broadband noise from drift
 
     # --- slope fits -----------------------------------------------------------
     censor_ms: float = 850.0  # a run median >= this is treated as censored (epoch ends at 900 ms)

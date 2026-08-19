@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -88,8 +89,15 @@ def recommend(table1: pd.DataFrame, cfg: SweepConfig) -> tuple[str, pd.DataFrame
     if rec.empty:
         return "Recommendation: no data", pd.DataFrame()
     rec = rec[np.isfinite(rec["median_recovery_ms"])]
-    noise = rec["median_prestim_sd_uV"].where(np.isfinite(rec["median_prestim_sd_uV"]), rec["median_baseline_sd_uV"])
-    rec = rec.assign(noise_sd_uV=noise)
+    # noise measure: SD of the clean (pre- or post-train) segment; baseline SD only when no clean segment exists
+    if "median_clean_sd_uV" in rec:
+        clean = rec["median_clean_sd_uV"]
+        noise = clean.where(np.isfinite(clean), rec["median_baseline_sd_uV"])
+        source = np.where(np.isfinite(clean), rec["clean_sd_source"].astype(str), "baseline (-500..-50 ms)")
+    else:
+        noise = rec["median_prestim_sd_uV"].where(np.isfinite(rec["median_prestim_sd_uV"]), rec["median_baseline_sd_uV"])
+        source = np.where(np.isfinite(rec["median_prestim_sd_uV"]), "pre-train", "baseline (-500..-50 ms)")
+    rec = rec.assign(noise_sd_uV=noise, noise_source=source)
     # reference noise: the setting in use (in vivo) when it is part of the sweep, else the sweep median
     ref_lower, ref_dsp, ref_upper = cfg.reference_setting
     is_ref = (
@@ -105,7 +113,7 @@ def recommend(table1: pd.DataFrame, cfg: SweepConfig) -> tuple[str, pd.DataFrame
         ref_noise = float(np.nanmedian(rec["noise_sd_uV"])) if len(rec) else float("nan")
         ref_text = f"reference = sweep median {ref_noise:.2f} uV (in-vivo setting not in sweep)"
     rec = rec.assign(is_reference=is_ref, noise_ok=rec["noise_sd_uV"] <= cfg.noise_factor * ref_noise, upper_ok=rec["upper_hz"] >= cfg.min_upper_hz, not_censored=rec["frac_censored"] < 0.5)
-    cols = ["run_id", "folder", "arms", "lower_hz", "dsp_enabled", "dsp_hz", "upper_hz", "tau_nominal_ms", "median_recovery_ms", "recovery_ci_low", "recovery_ci_high", "frac_censored", "median_rail_fs_ms", "median_peak_uV", "noise_sd_uV", "median_baseline_sd_uV", "median_prestim_sd_uV", "is_reference", "noise_ok", "upper_ok", "not_censored"]
+    cols = ["run_id", "folder", "arms", "lower_hz", "dsp_enabled", "dsp_hz", "upper_hz", "tau_nominal_ms", "median_recovery_ms", "recovery_ci_low", "recovery_ci_high", "frac_censored", "median_rail_fs_ms", "median_peak_uV", "noise_sd_uV", "noise_source", "median_baseline_sd_uV", "median_prestim_sd_uV"] + [c for c in ("median_clean_sd_uV", "median_clean_sd_gt5hz_uV") if c in rec] + ["is_reference", "noise_ok", "upper_ok", "not_censored"]
     pareto = rec[cols].sort_values(["median_recovery_ms", "noise_sd_uV"]).reset_index(drop=True)
     eligible = pareto[pareto["noise_ok"] & pareto["upper_ok"] & pareto["not_censored"]]
     if eligible.empty:
@@ -115,14 +123,58 @@ def recommend(table1: pd.DataFrame, cfg: SweepConfig) -> tuple[str, pd.DataFrame
     text = (
         f"Recommendation: {best['folder']} -- analog lower {format_hz(best['lower_hz'])} Hz, {dsp}, upper {format_hz(best['upper_hz'])} Hz "
         f"(tau_nominal {best['tau_nominal_ms']:.1f} ms): median recovery {best['median_recovery_ms']:.1f} ms "
-        f"[{best['recovery_ci_low']:.1f}, {best['recovery_ci_high']:.1f}] on the recording contacts, noise SD {best['noise_sd_uV']:.2f} uV "
-        f"({ref_text}, limit {cfg.noise_factor:g}x), upper >= {cfg.min_upper_hz:g} Hz. "
+        f"[{best['recovery_ci_low']:.1f}, {best['recovery_ci_high']:.1f}] on the recording contacts, noise SD {best['noise_sd_uV']:.2f} uV ({best['noise_source']}"
+        + (f"; > {cfg.clean_sd_highpass_hz:g} Hz component {best['median_clean_sd_gt5hz_uV']:.2f} uV" if "median_clean_sd_gt5hz_uV" in best and np.isfinite(best["median_clean_sd_gt5hz_uV"]) else "")
+        + f") vs {ref_text} (limit {cfg.noise_factor:g}x), upper >= {cfg.min_upper_hz:g} Hz. "
         f"Runner-up: " + (f"{eligible.iloc[1]['folder']} ({eligible.iloc[1]['median_recovery_ms']:.1f} ms, {eligible.iloc[1]['noise_sd_uV']:.2f} uV)" if len(eligible) > 1 else "none")
     )
     return text, pareto
 
 
-def build_verdict(sweep: SweepSet, table1: pd.DataFrame, per_channel: pd.DataFrame, slopes: dict[str, SlopeResult], cfg: SweepConfig) -> Verdict:
+def floor_clause(table1: pd.DataFrame, arm: str) -> str:
+    """Recovery at the two shortest-tau runs of an arm: does it keep falling with tau or sit on a floor?"""
+    rows = arm_table(table1[table1["contacts"] == "recording"], arm) if not table1.empty else table1
+    rows = rows[np.isfinite(rows["median_recovery_ms"])] if not rows.empty else rows
+    if len(rows) < 2:
+        return ""
+    rows = rows.sort_values("tau_nominal_ms")
+    a, b = rows.iloc[0], rows.iloc[1]
+    ratio_rec = float(b["median_recovery_ms"]) / float(a["median_recovery_ms"]) if a["median_recovery_ms"] > 0 else float("nan")
+    ratio_tau = float(b["tau_nominal_ms"]) / float(a["tau_nominal_ms"]) if a["tau_nominal_ms"] > 0 else float("nan")
+    text = (f"; shortest tau: {a['median_recovery_ms']:.0f} ms at tau {a['tau_nominal_ms']:.2g} ms vs {b['median_recovery_ms']:.0f} ms at tau {b['tau_nominal_ms']:.2g} ms "
+            f"(recovery x{ratio_rec:.2f} for tau x{ratio_tau:.1f})")
+    if np.isfinite(ratio_rec) and np.isfinite(ratio_tau) and ratio_tau >= 2.0 and ratio_rec < 1.3:
+        text += f" -> floor of ~{a['median_recovery_ms']:.0f} ms not set by the nominal time constant"
+    return text
+
+
+def per_channel_clause(slope: SlopeResult) -> str:
+    if not slope.per_channel:
+        return ""
+    parts = [f"{c} {v[0]:.2f} [{v[1]:.2f}, {v[2]:.2f}]" for c, v in sorted(slope.per_channel.items())]
+    return "; per-channel slopes: " + ", ".join(parts)
+
+
+def sensitivity_clause(slopes: dict[str, SlopeResult], arm: str, additive: dict | None = None) -> str:
+    alt = slopes.get(f"{arm}_nodrift")
+    base = slopes.get(arm)
+    if alt is None or base is None or alt.n_runs_used == base.n_runs_used or not np.isfinite(alt.slope):
+        return ""
+    text = f"; sensitivity without the drift rule: slope {alt.slope:.2f} [{alt.ci_low:.2f}, {alt.ci_high:.2f}] over {alt.n_runs_used} runs -> {alt.verdict}"
+    if additive and f"{arm}_nodrift" in additive and np.isfinite(additive[f"{arm}_nodrift"].a):
+        f = additive[f"{arm}_nodrift"]
+        text += f", additive a = {f.a:.2f} [{f.a_ci[0]:.2f}, {f.a_ci[1]:.2f}], b = {f.b_ms:.0f} ms (R2 vs run medians {f.r2_medians:.2f})"
+    return text
+
+
+def additive_clause(additive: dict | None, arm: str, cfg: SweepConfig) -> str:
+    if not additive or arm not in additive:
+        return ""
+    text = additive[arm].describe(math.log(cfg.rail_level_uV / cfg.threshold_uV))
+    return f"; {text}" if text else ""
+
+
+def build_verdict(sweep: SweepSet, table1: pd.DataFrame, per_channel: pd.DataFrame, slopes: dict[str, SlopeResult], cfg: SweepConfig, additive: dict | None = None) -> Verdict:
     v = Verdict()
     v.arm_A = _slope_line("A", slopes["A"], {
         "~1": "the low-frequency analog pole sets recovery; the fix is a higher analog cutoff",
@@ -134,10 +186,12 @@ def build_verdict(sweep: SweepSet, table1: pd.DataFrame, per_channel: pd.DataFra
         "~1": "the DSP cutoff sets recovery",
         "intermediate": "recovery scales with the DSP cutoff but weaker than 1:1",
     })
+    v.arm_A += per_channel_clause(slopes["A"]) + additive_clause(additive, "A", cfg) + floor_clause(table1, "A") + sensitivity_clause(slopes, "A", additive)
+    v.arm_B += per_channel_clause(slopes["B"]) + additive_clause(additive, "B", cfg) + floor_clause(table1, "B") + sensitivity_clause(slopes, "B", additive)
     v.arm_C, _ = arm_c_line(table1, per_channel, cfg)
     v.lines = [v.arm_A, v.arm_B, v.arm_C]
     v.recommendation, v.pareto = recommend(table1, cfg)
     return v
 
 
-__all__ = ["Verdict", "arm_c_line", "build_verdict", "recommend"]
+__all__ = ["Verdict", "arm_c_line", "build_verdict", "floor_clause", "per_channel_clause", "recommend", "sensitivity_clause"]

@@ -43,6 +43,10 @@ class RunMetrics:
     compliance_flag: bool
     rail_levels: dict[str, tuple[float, float]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    clean_sd_uV: dict[str, float] = field(default_factory=dict)
+    clean_sd_gt5hz_uV: dict[str, float] = field(default_factory=dict)
+    clean_sd_seconds: float = 0.0
+    clean_sd_source: str = "none"
 
 
 def spec_rail_mask(raw_uV: np.ndarray, level_uV: float) -> np.ndarray:
@@ -85,6 +89,41 @@ def prestim_noise_sd(raw_uV: np.ndarray, sample_rate_hz: float, first_onset_samp
     return float(segment.std(ddof=1)), (end - start) / sample_rate_hz
 
 
+def clean_segment_sd(
+    raw_uV: np.ndarray, sample_rate_hz: float, first_onset_sample: int, last_onset_sample: int, cfg: SweepConfig
+) -> tuple[float, float, float, str]:
+    """(raw SD, SD above 5 Hz, seconds, source) of the cleanest stimulation-free segment.
+
+    Pre-train segment when the lead-in allows (see ``prestim_noise_sd``), else the
+    post-train segment from ``posttrain_gap_s`` after the last pulse to the end.
+    The > 5 Hz SD separates broadband noise from sub-5 Hz drift, which is what
+    a low high-pass corner lets through.
+    """
+    from scipy import signal
+
+    minimum = int(round(cfg.prestim_min_s * sample_rate_hz))
+    sd, seconds = prestim_noise_sd(raw_uV, sample_rate_hz, first_onset_sample, cfg)
+    if np.isfinite(sd):
+        end = int(first_onset_sample - round(cfg.prestim_gap_before_first_s * sample_rate_hz))
+        start = int(round(cfg.prestim_skip_start_s * sample_rate_hz))
+        if end - start < minimum:
+            start = max(0, end - minimum)
+        segment = np.asarray(raw_uV[start:end], dtype=np.float64)
+        source = "pre-train"
+    else:
+        start = int(last_onset_sample + round(cfg.posttrain_gap_s * sample_rate_hz))
+        end = int(raw_uV.shape[0])
+        if end - start < minimum:
+            return float("nan"), float("nan"), 0.0, "none"
+        segment = np.asarray(raw_uV[start:end], dtype=np.float64)
+        sd = float(segment.std(ddof=1))
+        seconds = (end - start) / sample_rate_hz
+        source = "post-train"
+    sos = signal.butter(2, cfg.clean_sd_highpass_hz, btype="high", fs=sample_rate_hz, output="sos")
+    hf = signal.sosfiltfilt(sos, segment - segment.mean())
+    return float(sd), float(hf.std(ddof=1)), float(seconds), source
+
+
 def per_run_metrics(run: SweepRun, cfg: SweepConfig, acfg: AnalysisConfig | None = None) -> RunMetrics:
     """Load one run and compute every per-epoch metric on every channel."""
     acfg = acfg or cfg.analysis_config()
@@ -114,10 +153,15 @@ def per_run_metrics(run: SweepRun, cfg: SweepConfig, acfg: AnalysisConfig | None
     trace_win = window_slice(t_ms, cfg.trace_window_ms[0], cfg.trace_window_ms[1])
     trace_t = t_ms[trace_win][::TRACE_DECIMATE]
     first_onset = int(events.onset_samples.min())
+    last_onset = int(events.onset_samples.max())
 
     frames: list[pd.DataFrame] = []
     prestim: dict[str, float] = {}
     prestim_seconds = 0.0
+    clean_sd: dict[str, float] = {}
+    clean_hf: dict[str, float] = {}
+    clean_seconds = 0.0
+    clean_source = "none"
     traces: dict[str, np.ndarray] = {}
     rail_levels: dict[str, tuple[float, float]] = {}
     for c_index, channel in enumerate(record.channels):
@@ -182,6 +226,7 @@ def per_run_metrics(run: SweepRun, cfg: SweepConfig, acfg: AnalysisConfig | None
         frame["local_drift_uV"] = local_drift  # linear drift of raw across the centre window
         frames.append(frame)
         prestim[channel], prestim_seconds = prestim_noise_sd(record.data.raw_uV[c_index], fs, first_onset, cfg)
+        clean_sd[channel], clean_hf[channel], clean_seconds, clean_source = clean_segment_sd(record.data.raw_uV[c_index], fs, first_onset, last_onset, cfg)
         traces[channel] = np.median(centred[:, trace_win], axis=0)[::TRACE_DECIMATE]
 
     trials = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -198,6 +243,10 @@ def per_run_metrics(run: SweepRun, cfg: SweepConfig, acfg: AnalysisConfig | None
         trials["r2_below_min"] = trials["r2"] < cfg.r2_min
         trials["prestim_sd_uV"] = trials["channel"].map(prestim)
         trials["prestim_seconds"] = prestim_seconds
+        trials["clean_sd_uV"] = trials["channel"].map(clean_sd)
+        trials["clean_sd_gt5hz_uV"] = trials["channel"].map(clean_hf)
+        trials["clean_sd_seconds"] = clean_seconds
+        trials["clean_sd_source"] = clean_source
         trials["floor_ms"] = floor
         for arm in ("A", "B", "C"):
             trials[f"arm_{arm}_label"] = run.arm_label(arm)
@@ -210,6 +259,10 @@ def per_run_metrics(run: SweepRun, cfg: SweepConfig, acfg: AnalysisConfig | None
         trials=trials,
         prestim_sd_uV=prestim,
         prestim_seconds=prestim_seconds,
+        clean_sd_uV=clean_sd,
+        clean_sd_gt5hz_uV=clean_hf,
+        clean_sd_seconds=clean_seconds,
+        clean_sd_source=clean_source,
         median_trace_uV=traces,
         trace_t_ms=trace_t,
         floor_ms=floor,
@@ -221,4 +274,4 @@ def per_run_metrics(run: SweepRun, cfg: SweepConfig, acfg: AnalysisConfig | None
     )
 
 
-__all__ = ["RunMetrics", "TRACE_DECIMATE", "local_centre", "per_run_metrics", "prestim_noise_sd", "spec_rail_mask"]
+__all__ = ["RunMetrics", "TRACE_DECIMATE", "clean_segment_sd", "local_centre", "per_run_metrics", "prestim_noise_sd", "spec_rail_mask"]

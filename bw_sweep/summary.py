@@ -88,6 +88,14 @@ def _group_summary(group: pd.DataFrame, cfg: SweepConfig, rng: np.random.Generat
     out["median_prestim_sd_uV"] = float(np.nanmedian(ps.to_numpy(dtype=float))) if len(ps) else float("nan")
     out["prestim_sd_uV_by_channel"] = "; ".join(f"{c} {v:.2f}" for c, v in ps.items())
     out["prestim_seconds"] = float(group["prestim_seconds"].iloc[0]) if "prestim_seconds" in group else float("nan")
+    if "clean_sd_uV" in group:
+        cs = group.groupby("channel")["clean_sd_uV"].first()
+        ch = group.groupby("channel")["clean_sd_gt5hz_uV"].first()
+        out["median_clean_sd_uV"] = float(np.nanmedian(cs.to_numpy(dtype=float))) if len(cs) else float("nan")
+        out["median_clean_sd_gt5hz_uV"] = float(np.nanmedian(ch.to_numpy(dtype=float))) if len(ch) else float("nan")
+        out["clean_sd_uV_by_channel"] = "; ".join(f"{c} {v:.2f}" for c, v in cs.items())
+        out["clean_sd_seconds"] = float(group["clean_sd_seconds"].iloc[0])
+        out["clean_sd_source"] = str(group["clean_sd_source"].iloc[0])
     out["floor_ms"] = float(group["floor_ms"].iloc[0])
     return out
 

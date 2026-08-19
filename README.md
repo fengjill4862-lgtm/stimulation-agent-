@@ -162,3 +162,12 @@ setting recommendation), metadata.json. Plan and design notes:
 Default root: `~/SynologyDrive/Research/Stimulation/20260818 re stim in vitro
 filter settings`. Do not run it on recordings without asking (working
 agreement above).
+
+Run on 2026-08-18 (outputs in `<root>/bandwidth_sweep/`, details in
+`BANDWIDTH_SWEEP_PLAN.md` section 10): the far recording contact follows the
+high-pass pole (Arm A per-channel slope 1.19), the contact next to the stim
+site sits on a 94-300 ms floor at any cutoff; the DSP-on runs are described
+by recovery = 2.9 x tau + 82 ms (R2 0.98), so the DSP cutoff sets the linear
+part of the recovery and is the knob that shortens it (k=12 ~500 ms -> k=5
+44 ms in PBS at 100 uA); recording contacts do not rail below 3 kHz upper
+bandwidth; broadband noise is 3.4-4.5 uV at every setting.

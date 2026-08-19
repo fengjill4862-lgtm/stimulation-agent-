@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import math
 import platform
 import subprocess
 import textwrap
@@ -31,7 +32,7 @@ from bw_sweep.config import ARMS, SweepConfig, sweep_config_to_dict
 from bw_sweep.figures import fig_arm_c, fig_noise, fig_r2, fig_recovery_vs_tau, fig_tau_fit, fig_traces
 from bw_sweep.load import SweepSet, discover_sweep, format_settings_ascii, settings_table
 from bw_sweep.metrics import RunMetrics, per_run_metrics
-from bw_sweep.stats import SlopeResult, loglog_slope
+from bw_sweep.stats import AdditiveFit, SlopeResult, additive_fit, loglog_slope
 from bw_sweep.summary import in_arm, table1, table_per_channel
 from bw_sweep.verdict import Verdict, build_verdict
 
@@ -47,6 +48,7 @@ class SweepResult:
     captions: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, object] = field(default_factory=dict)
     slopes: dict[str, SlopeResult] = field(default_factory=dict)
+    additive: dict[str, AdditiveFit] = field(default_factory=dict)
     verdict: Verdict | None = None
     log: list[str] = field(default_factory=list)
     metrics: dict[str, RunMetrics] = field(default_factory=dict)
@@ -206,6 +208,14 @@ def run_sweep(
             sub = sub[~sub["is_stim_contact"]]
         result.slopes[arm] = loglog_slope(sub, arm=arm, x_col="tau_nominal_ms", y_col="recovery_ms", cfg=cfg, rng=rng, floor_by_run=floors)
         _log(result, result.slopes[arm].describe(), quiet)
+        # sensitivity: same fit without the pre-pulse drift rule
+        result.slopes[f"{arm}_nodrift"] = loglog_slope(sub, arm=f"{arm} (no drift rule)", x_col="tau_nominal_ms", y_col="recovery_ms", cfg=cfg.with_(drifting_fraction_max=1.01), rng=rng, floor_by_run=floors)
+        if result.slopes[f"{arm}_nodrift"].n_runs_used != result.slopes[arm].n_runs_used:
+            _log(result, result.slopes[f"{arm}_nodrift"].describe(), quiet)
+        # additive model on the same runs (and on the no-drift-rule set)
+        for key, sl in ((arm, result.slopes[arm]), (f"{arm}_nodrift", result.slopes[f"{arm}_nodrift"])):
+            result.additive[key] = additive_fit(sub, arm=key, x_col="tau_nominal_ms", y_col="recovery_ms", run_ids=sl.used_run_ids, cfg=cfg, rng=rng)
+        _log(result, f"arm {arm}: " + result.additive[arm].describe(math.log(cfg.rail_level_uV / cfg.threshold_uV)), quiet)
         # tau_fit vs tau_nominal slope (informative fits only)
         inf = sub[sub["fit_informative"] & sub["fit_converged"]]
         result.slopes[f"{arm}_taufit"] = loglog_slope(inf, arm=f"{arm} tau_fit", x_col="tau_nominal_ms", y_col="tau_fit_ms", cfg=cfg, rng=rng)
@@ -213,9 +223,10 @@ def run_sweep(
     result.slopes["all_taufit"] = loglog_slope(all_inf, arm="all tau_fit", x_col="tau_nominal_ms", y_col="tau_fit_ms", cfg=cfg, rng=rng)
     _log(result, result.slopes["all_taufit"].describe(), quiet)
     result.metadata["slopes"] = {k: {kk: vv for kk, vv in v.__dict__.items()} for k, v in result.slopes.items()}
+    result.metadata["additive_fits"] = {k: {kk: vv for kk, vv in v.__dict__.items()} for k, v in result.additive.items()}
 
     # ---- verdict ----------------------------------------------------------------------------
-    result.verdict = build_verdict(sweep, t1, pc, result.slopes, cfg)
+    result.verdict = build_verdict(sweep, t1, pc, result.slopes, cfg, additive=result.additive)
     result.tables["table2_recommendation_pareto"] = result.verdict.pareto
     for line in result.verdict.lines + [result.verdict.recommendation]:
         _log(result, line, quiet)

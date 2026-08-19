@@ -182,4 +182,55 @@ def loglog_slope(
     return result
 
 
-__all__ = ["SlopeResult", "fraction_ci", "loglog_slope", "slope_verdict", "summarize"]
+@dataclass
+class AdditiveFit:
+    """recovery = a * tau + b on per-trial rows (linear in the parameters), cluster bootstrap by run."""
+
+    arm: str
+    a: float = float("nan")
+    b_ms: float = float("nan")
+    a_ci: tuple[float, float] = (float("nan"), float("nan"))
+    b_ci: tuple[float, float] = (float("nan"), float("nan"))
+    r2_medians: float = float("nan")  # R2 of the fit against the per-run medians
+    n_runs: int = 0
+
+    def describe(self, linear_prediction: float | None = None) -> str:
+        if self.n_runs < 2 or not np.isfinite(self.a):
+            return ""
+        text = (f"additive model recovery = a*tau + b: a = {self.a:.2f} [{self.a_ci[0]:.2f}, {self.a_ci[1]:.2f}], "
+                f"b = {self.b_ms:.0f} ms [{self.b_ci[0]:.0f}, {self.b_ci[1]:.0f}] (R2 vs run medians {self.r2_medians:.2f}, {self.n_runs} runs)")
+        if linear_prediction is not None and np.isfinite(linear_prediction):
+            text += f"; a linear high-pass recovering from the rail predicts a = ln(rail/threshold) = {linear_prediction:.2f}"
+        return text
+
+
+def additive_fit(trials: pd.DataFrame, *, arm: str, x_col: str, y_col: str, run_ids: list[str], cfg: SweepConfig, rng: np.random.Generator) -> AdditiveFit:
+    result = AdditiveFit(arm=arm)
+    frame = trials[trials["run_id"].isin(run_ids) & np.isfinite(trials[x_col]) & np.isfinite(trials[y_col])]
+    result.n_runs = int(frame["run_id"].nunique())
+    if result.n_runs < 2:
+        return result
+    x = frame[x_col].to_numpy(dtype=float)
+    y = frame[y_col].to_numpy(dtype=float)
+    result.a, result.b_ms = _ols(x, y)
+    groups = [np.flatnonzero(frame["run_id"].to_numpy() == r) for r in run_ids if (frame["run_id"] == r).any()]
+    draws_a, draws_b = [], []
+    for _ in range(cfg.bootstrap_n):
+        idx = np.concatenate([g[rng.integers(0, g.size, size=g.size)] for g in groups])
+        a, b = _ols(x[idx], y[idx])
+        draws_a.append(a)
+        draws_b.append(b)
+    da, db = np.asarray(draws_a), np.asarray(draws_b)
+    da, db = da[np.isfinite(da)], db[np.isfinite(db)]
+    if da.size and db.size:
+        result.a_ci = tuple(float(v) for v in np.percentile(da, [2.5, 97.5]))
+        result.b_ci = tuple(float(v) for v in np.percentile(db, [2.5, 97.5]))
+    med = frame.groupby("run_id").agg(x=(x_col, "median"), y=(y_col, "median"))
+    pred = result.a * med["x"] + result.b_ms
+    ss_res = float(np.sum((med["y"] - pred) ** 2))
+    ss_tot = float(np.sum((med["y"] - med["y"].mean()) ** 2))
+    result.r2_medians = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    return result
+
+
+__all__ = ["AdditiveFit", "SlopeResult", "additive_fit", "fraction_ci", "loglog_slope", "slope_verdict", "summarize"]

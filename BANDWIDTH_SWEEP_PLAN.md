@@ -1,13 +1,13 @@
 # Bandwidth Sweep Analysis -- Plan (session 20260818 re stim in vitro filter settings)
 
-Written 2026-08-18. Status: **implemented as `bw_sweep/` (2026-08-18), not yet
-run on the sweep folder -- no output has been written there** (working
-agreement: revised code does not touch real recordings until you say so).
-Verified with `python3 -m bw_sweep.selftest` (45 synthetic checks) and a run
-on scratch copies of three run folders under the job tmp dir. Section 9 lists
-what the build changed relative to sections 1-7. Everything below that is
-stated as a data fact was read from the `.rhs` headers / `settings.xml` and a
-read-only `validate_run` pass with the *existing* loader.
+Written 2026-08-18. Status: **implemented as `bw_sweep/` and run on the sweep
+folder on 2026-08-18 (user go-ahead); outputs in
+`<root>/bandwidth_sweep/`.** Section 9 lists what the build changed relative
+to sections 1-7, section 10 the results. Verified with
+`python3 -m bw_sweep.selftest` (45 synthetic checks) before the run.
+Everything in sections 1-8 that is stated as a data fact was read from the
+`.rhs` headers / `settings.xml` and a read-only `validate_run` pass with the
+*existing* loader.
 
 Question: does stimulation-artifact recovery scale with the amplifier's
 low-frequency time constant (a linear high-pass step response), or is it a
@@ -323,3 +323,70 @@ in `bw_sweep/config.py` as named parameters.
    `table1b_summary_per_run_channel`, `table2_recommendation_pareto`,
    `trials_per_epoch`, `fig0..fig6`, `captions.txt`, `verdict.txt`,
    `metadata.json`, `log.txt` under `<root>/bandwidth_sweep/`.
+8. Added after the first real run: clean-segment noise SD (pre-train, or
+   post-train 2 s after the last pulse when there was no lead-in) and its
+   > 5 Hz component (`clean_sd_*` columns; fig6 crosses/plus signs); the
+   recommendation uses the clean-segment SD. Verdict lines carry
+   per-channel slopes, an additive fit recovery = a*tau + b (cluster
+   bootstrap), a shortest-tau floor clause, and a sensitivity fit without
+   the drift rule.
+
+## 10. Results (run 2026-08-18, `bandwidth_sweep/` in the sweep folder)
+
+16 runs, 3192 epochs (4 channels x 50 pulses, 2 epochs dropped at file
+edges), threshold fixed at 100 uV, all one-knob checks pass. Verdict lines
+are in `verdict.txt`; the numbers below are recording-contact medians unless
+stated (A-021 is 2.5 mm from the stim contact A-026, A-022 2 mm, A-025
+0.5 mm).
+
+**Arm A (analog lower cutoff).** Median recovery 0.095 Hz 871 ms (45 %
+censored), 1.1 Hz censored (>= 900), 9.9 Hz 164, 29.9 Hz 65, 97.8 Hz 63,
+324 Hz 52 ms. Pooled log-log slope 0.65 [0.57, 0.74] over the four
+uncensored runs -> intermediate, but the pooling hides two regimes:
+A-021 (far contact) follows the pole with slope 1.19 [1.11, 1.26]
+(2 ms at 324 Hz, 21 ms at 98 Hz, 56 ms at 30 Hz, 126 ms at 10 Hz), while
+A-025 (next to the stim contact) sits on a floor of 94-300 ms whatever the
+cutoff (slope 0.50) and A-022 in between (52-153 ms, slope 0.28). So the
+low-frequency analog pole does set the recovery of the far contact, but
+the near contacts carry an additional, amplitude-dependent component of
+~50-300 ms that no high-pass setting removes.
+
+**Arm B (DSP cutoff).** off 871 (censored), k=14 856 (censored), k=12
+498 (drift-flagged), k=10 169, k=8 88, k=5 44 ms. Slope 0.32 [0.28, 0.36]
+over k=10/8/5, 0.42 [0.39, 0.44] with k=12 included. The additive model
+fits the four DSP-on runs almost exactly: recovery = 2.87 [2.69, 3.04] x
+tau + 82 ms (R2 vs run medians 0.98); a linear high-pass recovering from
+the rail predicts 4.16 x tau. tau_fit ~= tau_nominal for k=10 and k=12
+(ratio 0.92 and 1.26; 54-64 % of tails exponential with R2 >= 0.9), i.e.
+in the DSP-on runs the tail *is* the DSP step response plus a fixed
+~80 ms floor. The DSP is therefore not "exonerated": its cutoff sets the
+linear part of the recovery (k=12 -> ~500 ms in PBS at 100 uA) and it is
+the knob that shortens it. The same setting in vivo (260817) gave 174 ms
+median at lower currents.
+
+**Arm C (analog upper cutoff).** Recording contacts do not rail at any
+setting except A-021 at 7500 Hz (26 % of trials; zero at <= 3008 Hz); the
+0-5 ms peak on the recording contacts falls 8722 -> 391 uV from 7604 to
+300 Hz. The stim contact rails at every setting and rails *longer* at
+narrower bandwidth (25 ms at 7604 Hz -> 60 ms at 300 Hz). Recovery on
+this arm is 465-900 ms because the analog pole is 1 Hz throughout; the
+post-train baselines drift by hundreds of uV (electrode polarisation).
+
+**Noise (fig6).** The broadband noise (> 5 Hz SD of the stimulation-free
+segment) is 3.4-4.5 uV on every channel at every setting; raw SD
+differences (up to ~1 mV) are sub-5 Hz drift that the low corners let
+through. Baseline SD in the -500..-50 ms window is tail-contaminated at
+long tau (245-940 uV) and equals the noise floor (3.7-5 uV) at short tau.
+
+**Recommendation printed:** DSP 152 Hz (k=5), analog 0.1 Hz, upper
+7604 Hz: 44 ms median [43, 52] (per channel 34 / 47 / 139 ms), noise
+3.4 uV; runner-up analog 324 Hz / DSP off: 52 ms (2 / 52 / 94 ms). Both
+remove everything below ~150-300 Hz (spikes only). If LFP is needed, the
+ladder is DSP k=8 (18.7 Hz): 88 ms (72 / 80 / 216); k=10 (4.7 Hz):
+169 ms (165 / 130 / 228); k=12 (1.17 Hz, the in-vivo setting): 498 ms.
+
+**Caveats.** 1 s IPI: recoveries >= ~800 ms are censored and their
+baselines sit on the previous tail (local centring + drift flags handle
+this; the spec-centred recovery is in table1 for comparison). PBS at
+100 uA into 123-185 kOhm; the near-contact floor is amplitude-dependent
+and will differ in vivo -- the *scaling* with the cutoff is what transfers.

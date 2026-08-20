@@ -27,18 +27,21 @@ spike-sorting workflow.)
 | Function | Purpose | UI module | Numerics |
 | --- | --- | --- | --- |
 | 0 | Rename RHS folders from the recorded stim waveform | `wideband_function0_ui.py` | `rename_rhs_folders_by_stim_waveform.py` |
-| 1 | Raw wideband traces | `wideband_function1_ui.py` | `plot_rhs_raw_wideband_with_stim_legend.py` |
-| 2 | Bandpass + amplitude window | `wideband_function2_ui.py` | `plot_rhs_filtered_wideband.py` |
-| 3 | Stim-triggered event grid (quick look) | `wideband_function3_ui.py` | `plot_rhs_stim_triggered_events.py` |
-| 4 | Recorded response only | `wideband_function4_ui.py` | `plot_rhs_filtered_wideband.py` |
-| 5 | Pre/post and event-locked band power | `wideband_function5_power_ui.py` | `plot_rhs_power_analysis.py` |
+| 2 | Continuous traces: raw, or bandpass + amplitude window, optional ignore-stim | `wideband_function2_ui.py` | `plot_rhs_raw_wideband_with_stim_legend.py` + `plot_rhs_filtered_wideband.py` |
+| 3 | Stim-triggered event grid (quick look; epoch -> blank -> filter) | `wideband_function3_ui.py` | `plot_rhs_stim_triggered_events.py` |
+| 5 | Pre/post neuromodulation band power (event-locked: Function 6 or the batch runner) | `wideband_function5_power_ui.py` | `plot_rhs_power_analysis.py` |
 | 6 | Session-level stimulation analysis (Spec v2) | `wideband_function6_session_ui.py` | `stim_analysis/` + `run_stim_analysis.py` |
+
+Functions 1 and 4 were folded into Function 2 on 2026-08-20: Raw mode is the
+old Function 1, Filtered + "Ignore stim" is the old Function 4.
 
 Shared: `wideband_ui_common.py` (widgets, previews, atomic saves),
 `rhs_stim.py` (channel reading, stim-channel resolution), `rhs_reader.py`
 (multi-channel RHS readers), `rhs_naming.py`, `rhs_files.py`.
-Batch: `batch_run_wideband_main_ui.py` runs Functions 1-5 over every run
-below a parent folder.
+Batch: `batch_run_wideband_main_ui.py` runs the raw / filtered / events /
+response / power outputs for every run below a parent folder (CLI mode names
+unchanged; `--power-mode event` remains the scripted home of event-locked
+power).
 
 ## Function 6: session-level stimulation analysis (Analysis Spec v2)
 

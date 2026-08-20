@@ -39,11 +39,9 @@ The notebook currently contains Functions 0 through 5:
 | Function | UI purpose | UI module | Numerics |
 | --- | --- | --- | --- |
 | 0 | Preview and apply RHS folder renames from the recorded stim waveform | `wideband_function0_ui.py` | `rename_rhs_folders_by_stim_waveform.py` |
-| 1 | Plot raw wideband data for one, many, or all recorded channels | `wideband_function1_ui.py` | `plot_rhs_raw_wideband_with_stim_legend.py` |
-| 2 | Plot bandpass-filtered samples inside a signed amplitude and time window | `wideband_function2_ui.py` | `plot_rhs_filtered_wideband.py` |
-| 3 | Plot stim-triggered response events, three events per row | `wideband_function3_ui.py` | `plot_rhs_stim_triggered_events.py` |
-| 4 | Plot recorded response only, without requiring or showing stim current | `wideband_function4_ui.py` | `plot_rhs_filtered_wideband.py` |
-| 5 | Pre/post neuromodulation or stim-triggered band-power analysis | `wideband_function5_power_ui.py` | `plot_rhs_power_analysis.py` |
+| 2 | Continuous traces: raw wideband, or bandpass + amplitude filtered, optional ignore-stim (absorbed the old Functions 1 and 4 on 2026-08-20) | `wideband_function2_ui.py` | `plot_rhs_raw_wideband_with_stim_legend.py` + `plot_rhs_filtered_wideband.py` |
+| 3 | Plot stim-triggered response events, three events per row (epoch -> blank -> filter) | `wideband_function3_ui.py` | `plot_rhs_stim_triggered_events.py` |
+| 5 | Pre/post neuromodulation band-power analysis (event-locked power: Function 6 or `batch_run_wideband_main_ui.py --power-mode event`) | `wideband_function5_power_ui.py` | `plot_rhs_power_analysis.py` |
 | 6 | Session-level stimulation analysis (Spec v2): validation, artifact recovery gating, secondary analyses over every run of a session | `wideband_function6_session_ui.py` | `stim_analysis/` package + `run_stim_analysis.py` CLI |
 
 Shared across the UI modules: `wideband_ui_common.py` (widget factories, preview
@@ -275,60 +273,45 @@ before renaming.
 The helper strips a previously generated suffix before creating a new one and
 avoids collisions by adding `__2`, `__3`, and so on.
 
-## Function 1: Raw Wideband
+## Function 2: Continuous Traces (Raw / Filtered)
+
+Absorbed the old Functions 1 and 4 on 2026-08-20. Launcher:
+`show_function2_continuous_traces`. All loading goes through
+`rhs_stim.read_selected_channels` -- the single insertion point for a future
+`.rhd` reader.
 
 Controls:
 
-- `RHS folder`: pasteable session folder path.
+- `Mode`: `Raw wideband` (default) or `Filtered`.
+- `Ignore stim (response only)` checkbox: Filtered mode only; skips the stim
+  lookup entirely (the old Function 4). Toggling it swaps the amplitude seed
+  `-100 - 100 uV` <-> `-500 - 500 uV` only while the field still holds the
+  other state's default.
 - `Channels`: `all`, explicit channels, or channel ranges.
+- `Bandpass` / `Amplitude`: Filtered mode only; `all` or a numeric range, and
+  a signed uV window that also pins the y-axis.
 - `Time (s)`: `all` or an absolute range such as `0-60`.
 - `Max points`: display-envelope limit; default `600000`.
-- `Pulse`: which decoded pulse to use in the waveform caption; default `1`.
+- `Pulse`: Raw mode only; which decoded pulse to use in the caption.
 
-Behavior:
+Behavior per mode:
 
-- No bandpass filter is applied.
-- Multiple selected channels are stacked vertically.
-- There are no vertical time-grid lines.
-- The stimulation channel is marked with `*` when it is found among the
-  selected channels.
-- The upper-right caption shows a small thin red biphasic pulse with only its
-  amplitude (for example `50uA`) and first-phase duration (for example `0.1ms`).
-- The caption is raised above the traces to avoid covering recorded data.
-- Preview generation does not write a file.
-- **Save PNG** writes the current preview into the selected RHS folder.
-
-Current limitation: Function 1 searches for nonzero `stim_data` among the
-selected channels. Enter `all` when the stimulation channel is not known. It
-does not currently perform the all-recorded-channel fallback used by Functions
-3 and 5.
-
-## Function 2: Bandpass and Amplitude View
-
-Controls:
-
-- `Channels`: supports `all`, explicit channels, and ranges.
-- `Bandpass`: `all` or a numeric range such as `0.1-150`, `200-400`, or
-  `400-6000 Hz`.
-- `Amplitude`: a signed range such as `-100 - 100 uV` or `-100 - 200 uV`.
-- `Time (s)`: `all` or an absolute recording range.
-- `Max points`: drawing limit.
-
-Behavior:
-
-- Numeric bands use a zero-phase Butterworth bandpass.
-- `all` keeps all recorded frequencies.
-- Only samples inside the signed amplitude window are displayed.
-- The y-axis is set to the selected amplitude limits and labeled
-  `filtered amplitude (uV)`.
-- The former grey full-bandpass trace and both legend captions were removed.
-- There are no vertical time-grid lines.
-- The stimulation channel is starred when found among selected channels.
+- **Raw**: no filter; stacked channels; biphasic pulse caption (amplitude and
+  first-phase duration); status line reports displayed samples, stim pulses
+  and timestamp gaps. Output `raw_wideband_*.png`
+  (`default_output_path`).
+- **Filtered + stim**: zero-phase Butterworth for numeric bands; only samples
+  inside the amplitude window shown; stim channel starred; status reports RMS
+  and % amplitude-selected, plus the sub-1 Hz high-pass warning. Output
+  `filtered_wideband_*.png` (`default_filtered_output_path`).
+- **Filtered + ignore stim**: same plot with `stim_channel_name=None`; output
+  `recorded_response_*.png` with a time-window label
+  (`default_response_output_path`).
+- All modes resolve the stim channel with the all-recorded-channel fallback
+  (selected channels first, then every other recorded channel) unless Ignore
+  stim is checked.
 - Preview generation does not save; **Save PNG** writes into the selected RHS
   folder.
-
-Current limitation: like Function 1, Function 2 finds stimulation among the
-selected channels rather than scanning unselected recorded channels.
 
 ## Function 3: Stim-Triggered Response Events
 
@@ -372,26 +355,15 @@ Behavior:
   information without overlapping the next panel.
 - One combined PNG contains all events, arranged three events per row.
 - Preview generation does not save; **Save PNG** writes that combined image into
-  the selected RHS folder.
-
-## Function 4: Recorded Response Only
-
-This is the non-stimulation display path. It plots only recorded amplifier
-responses over an absolute recording-time range.
-
-Controls:
-
-```text
-Channels: supports all, explicit channels, and ranges
-Bandpass: all or numeric range
-Amplitude: signed uV range
-Time (s): all or absolute recording range
-Max points: default 600000
-```
-
-It does not search for `stim_data`, mark a stimulation channel, or draw a
-stim-current row. It reuses the Function 2 filtering and plotting code. The
-preview remains inline and is saved only when **Save PNG** is clicked.
+  the selected RHS folder (via `rhs_files.atomic_write_bytes`).
+- **Filter pipeline (since 2026-08-20)**: numeric bands are applied per event
+  in the epoch -> blank -> filter order (`epoch_filter_channel_data`): each
+  event's display window is cut with 500 ms padding (reflect-padded at
+  recording edges), stim pulses (-1/+5 ms) and the response-blank window are
+  linearly interpolated away, the epoch is bandpassed zero-phase, and the
+  padding is trimmed. The continuous trace is never filtered. `Bandpass=all`
+  remains a bit-identical pass-through. Every Function 3 PNG with a numeric
+  band differs from pre-2026-08-20 output by design.
 
 ## Function 5: Power Analysis
 
@@ -403,10 +375,12 @@ above 200 Hz does not make lower-frequency power analysis meaningless, but the
 result is evidence about field-potential power, not spike firing or unit
 activity.
 
-Common controls:
+The UI runs pre/post mode only (the event-locked mode was retired from the UI
+on 2026-08-20; its numerics remain in `plot_rhs_power_analysis.py` for
+`batch_run_wideband_main_ui.py --power-mode event` and as import donors to
+`stim_analysis/`). Controls:
 
 ```text
-Mode: Pre/Post neuromodulation (default) or Stim-triggered events
 Channels: all
 Scale (dB): 3
 Bands:
@@ -480,43 +454,20 @@ and after stimulation. That is useful within-session averaging, but it remains
 one biological session, not multiple independent experiments or animals.
 Overlapping windows are also not statistically independent replicates.
 
-### Stim-triggered events mode
+### Event-locked power (not in the UI)
 
-Defaults:
-
-```text
-Baseline (ms): -500 to -50
-Post (ms): 1100 to 1600
-Train gap (ms): 60
-Blank (ms): -10 to 50
-```
-
-One or more post windows can be entered on separate lines or separated by
-semicolons. The analysis:
-
-1. Groups pulses into train/events using `Train gap`.
-2. Extracts each event with filter padding.
-3. Blanks and linearly interpolates around every pulse using the `Blank` range.
-4. Bandpass-filters the cleaned epoch.
-5. Computes baseline and post mean power for each event.
-6. Computes paired event-level dB changes and bootstrap confidence intervals.
-
-This mode is for transient responses associated with repeated stim events. It
-is not a substitute for pre/post neuromodulation analysis when the question is a
-sustained state change after a long stimulation block.
+For event-locked band power use Function 6 (equal-length pairing,
+recovery-derived blanking, shuffle control), or the scripted
+`batch_run_wideband_main_ui.py --power-mode event`, which still calls
+`analyze_event_locked_power` (defaults: baseline -500 to -50 ms, post 1100 to
+1600 ms, train gap 60 ms, blank -10 to 50 ms).
 
 ### Power outputs
 
 Heatmaps use a fixed `coolwarm` dB scale and star the stimulation channel. The
 button saves both one PNG and one CSV into the selected data folder. Filename
-prefixes are:
-
-```text
-power_prepost_...
-power_event_...
-```
-
-Nothing is written during preview generation.
+prefixes are `power_prepost_...` from the UI, `power_event_...` from the batch
+runner's event mode. Nothing is written during preview generation.
 
 ## Function 6: Session Stimulation Analysis (Spec v2)
 
@@ -832,7 +783,8 @@ notebook; a Function 7 wrapper would be a thin call to
 
 1. ~~Functions 1 and 2 lack the all-recorded-channel stim fallback.~~
    **Fixed 2026-08-17.** Both now call `rhs_stim.resolve_stim_channel` with the
-   fallback enabled, as do the batch raw and filtered plots.
+   fallback enabled, as do the batch raw and filtered plots. (Function 1 has
+   since become Function 2's Raw mode, 2026-08-20.)
    `plot_raw_channels_with_stim_pulse` gained optional `stim_channel_name` /
    `stim_uA` parameters so Function 1 can draw the biphasic pulse caption from a
    stim channel that is not itself displayed. Status text distinguishes the two
@@ -852,16 +804,17 @@ notebook; a Function 7 wrapper would be a thin call to
 5. Full-session multichannel reads can consume substantial RAM because channels
    are loaded separately. Future optimization could add shared-file parsing or
    chunked power computation without changing the UI contract.
-7. Function 3 still filters the continuous trace before epoching (spec v2
-   pitfall 1) and lets a 0.1 Hz high-pass through; it now shows a warning when
-   the high-pass is below 1 Hz and annotates samples hidden by the amplitude
-   window. Re-ordering it to epoch -> filter changes every F3 PNG and the
-   batch byte-compare baseline, so it was deliberately left as a follow-up;
-   Function 6 is the spec-conforming path.
+7. ~~Function 3 still filters the continuous trace before epoching (spec v2
+   pitfall 1).~~ **Resolved 2026-08-20.** `epoch_filter_channel_data` now cuts
+   each event with 500 ms padding, blanks pulses and the response-blank
+   window, filters per epoch, and trims. Every Function 3 PNG with a numeric
+   band (and the batch byte-compare baseline) changed by design;
+   `Bandpass=all` output is unchanged.
 8. Function 5's event mode compares a 450 ms baseline with a 500 ms post
    window; log-power estimates of unequal length carry a small mean-dB bias on
-   noise (see the equal-length pairing in Function 6). Not changed, to keep
-   its outputs stable.
+   noise (see the equal-length pairing in Function 6). The mode was retired
+   from the Function 5 UI on 2026-08-20; the numerics are unchanged and remain
+   reachable through the batch runner's `--power-mode event`.
 6. The hardcoded default paths in launcher helpers are only initial text-box
    seeds. A future cleanup could centralize defaults, but arbitrary pasted paths
    must remain supported.

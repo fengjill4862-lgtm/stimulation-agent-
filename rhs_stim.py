@@ -8,10 +8,10 @@ all-recorded-channel fallback that the notebook has.
 `find_stim_channel_in_data` in `plot_rhs_raw_wideband_with_stim_legend` searches
 only the channels it is handed and takes no folder, so it cannot fall back on
 its own. `resolve_stim_channel` here adds that folder-aware fallback behind one
-flag, so each function can state its own policy instead of reimplementing it:
-
-- Functions 1 and 2 pass ``fallback=False``  (search selected channels only)
-- Functions 3 and 5 pass ``fallback=True``   (then scan every recorded channel)
+flag, so each function can state its own policy instead of reimplementing it.
+Every caller today (Functions 2, 3, 5 and the batch runner) uses the default
+``fallback=True`` -- selected channels first, then every recorded channel --
+except when Function 2's "Ignore stim" mode skips the lookup entirely.
 """
 
 from __future__ import annotations

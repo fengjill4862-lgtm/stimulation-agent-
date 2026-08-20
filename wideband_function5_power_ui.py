@@ -22,11 +22,8 @@ import ipywidgets as widgets
 from IPython.display import display
 
 from plot_rhs_power_analysis import (
-    analyze_event_locked_power,
     analyze_pre_post_power,
-    parse_post_windows_ms,
     parse_power_bands,
-    parse_time_window_ms,
     power_rows_to_csv,
 )
 from plot_rhs_raw_wideband_with_stim_legend import resolve_channel_selection
@@ -47,16 +44,6 @@ def show_function5_power_analysis(
         continuous_update=False,
         layout=widgets.Layout(width="100%", height="46px"),
         style={"description_width": "90px"},
-    )
-    power_mode_dropdown = widgets.Dropdown(
-        options=[
-            ("Pre/Post neuromodulation", "prepost"),
-            ("Stim-triggered events", "event"),
-        ],
-        value="prepost",
-        description="Mode",
-        layout=widgets.Layout(width="290px"),
-        style={"description_width": "60px"},
     )
     power_channel_text = widgets.Text(
         value="all",
@@ -99,35 +86,6 @@ def show_function5_power_analysis(
         style={"description_width": "110px"},
     )
 
-    event_baseline_text = widgets.Text(
-        value="-500 to -50",
-        description="Baseline (ms)",
-        placeholder="-500 to -50",
-        layout=widgets.Layout(width="240px"),
-        style={"description_width": "105px"},
-    )
-    event_post_text = widgets.Textarea(
-        value="1100 to 1600",
-        description="Post (ms)",
-        placeholder="1100 to 1600; 1600 to 2100",
-        continuous_update=False,
-        layout=widgets.Layout(width="330px", height="70px"),
-        style={"description_width": "85px"},
-    )
-    event_train_gap_float = widgets.FloatText(
-        value=60.0,
-        description="Train gap (ms)",
-        layout=widgets.Layout(width="230px"),
-        style={"description_width": "105px"},
-    )
-    event_blank_text = widgets.Text(
-        value="-10 to 50",
-        description="Blank (ms)",
-        placeholder="-10 to 50",
-        layout=widgets.Layout(width="210px"),
-        style={"description_width": "85px"},
-    )
-
     power_generate_button = widgets.Button(
         description="Generate Power Preview",
         icon="play",
@@ -157,23 +115,17 @@ def show_function5_power_analysis(
         widgets.VBox(
             [
                 power_folder_text,
-                widgets.HBox([power_mode_dropdown, power_channel_text, power_color_scale_float]),
+                widgets.HBox([power_channel_text, power_color_scale_float]),
                 power_bands_text,
                 widgets.HTML(
                     value=(
-                        "<b>Pre/Post mode:</b> compares clean recording before first stim "
-                        "with clean recording after last stim."
+                        "<b>Pre/Post neuromodulation:</b> compares clean recording before "
+                        "first stim with clean recording after last stim. For event-locked "
+                        "power use Function 6 (session analysis), or "
+                        "<code>batch_run_wideband_main_ui.py --power-mode event</code>."
                     )
                 ),
                 widgets.HBox([prepost_window_float, prepost_step_float, prepost_guard_float]),
-                widgets.HTML(
-                    value=(
-                        "<b>Stim-triggered mode:</b> epochs each train, blanks each pulse, "
-                        "then filters and computes paired baseline-vs-post power."
-                    )
-                ),
-                widgets.HBox([event_baseline_text, event_post_text]),
-                widgets.HBox([event_train_gap_float, event_blank_text]),
                 widgets.HBox([power_generate_button, power_save_button, power_target_label]),
                 power_status,
                 power_preview_output,
@@ -229,47 +181,19 @@ def show_function5_power_analysis(
         stim_channel_name, stim_uA_for_events, _pulse_segments = stim_channel_info
 
         try:
-            if power_mode_dropdown.value == "prepost":
-                result = analyze_pre_post_power(
-                    channel_data=raw_channel_data,
-                    stim_uA=stim_uA_for_events,
-                    sample_rate_hz=sample_rate_hz,
-                    folder=data_folder,
-                    bands=bands,
-                    stim_channel_name=stim_channel_name,
-                    window_s=float(prepost_window_float.value),
-                    step_s=float(prepost_step_float.value),
-                    guard_s=float(prepost_guard_float.value),
-                    color_scale_db=color_scale_db,
-                )
-                mode_label = "pre/post neuromodulation"
-            else:
-                baseline_window = parse_time_window_ms(
-                    event_baseline_text.value,
-                    default_name="baseline",
-                )
-                post_windows = parse_post_windows_ms(event_post_text.value)
-                blank_window = parse_time_window_ms(
-                    event_blank_text.value,
-                    default_name="blank",
-                )
-                train_gap_ms = float(event_train_gap_float.value)
-                if train_gap_ms < 0:
-                    raise ValueError("Train gap must be 0 ms or greater.")
-                result = analyze_event_locked_power(
-                    channel_data=raw_channel_data,
-                    stim_uA=stim_uA_for_events,
-                    sample_rate_hz=sample_rate_hz,
-                    folder=data_folder,
-                    bands=bands,
-                    baseline_window=baseline_window,
-                    post_windows=post_windows,
-                    train_gap_ms=train_gap_ms,
-                    stim_channel_name=stim_channel_name,
-                    blank_window_ms=(blank_window.start_ms, blank_window.end_ms),
-                    color_scale_db=color_scale_db,
-                )
-                mode_label = "stim-triggered"
+            result = analyze_pre_post_power(
+                channel_data=raw_channel_data,
+                stim_uA=stim_uA_for_events,
+                sample_rate_hz=sample_rate_hz,
+                folder=data_folder,
+                bands=bands,
+                stim_channel_name=stim_channel_name,
+                window_s=float(prepost_window_float.value),
+                step_s=float(prepost_step_float.value),
+                guard_s=float(prepost_guard_float.value),
+                color_scale_db=color_scale_db,
+            )
+            mode_label = "pre/post neuromodulation"
         except ValueError as exc:
             power_status.value = f"<b style='color:#b00020'>{exc}</b>"
             return

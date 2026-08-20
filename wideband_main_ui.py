@@ -73,10 +73,8 @@ _RELOAD_CHAIN = (
 
 _LAUNCHERS = {
     "show_function0_rename_rhs_folders": "wideband_function0_ui",
-    "show_function1_raw_wideband": "wideband_function1_ui",
-    "show_function2_bandpass_filtered": "wideband_function2_ui",
+    "show_function2_continuous_traces": "wideband_function2_ui",
     "show_function3_stim_triggered_events": "wideband_function3_ui",
-    "show_function4_recorded_response_only": "wideband_function4_ui",
     "show_function5_power_analysis": "wideband_function5_power_ui",
     "show_function6_session_analysis": "wideband_function6_session_ui",
     "show_function7_evoked_response": "wideband_function7_evoked_ui",
@@ -105,14 +103,9 @@ def show_function0_rename_rhs_folders(namespace: MutableMapping[str, object] | N
     _launch("show_function0_rename_rhs_folders", namespace)
 
 
-def show_function1_raw_wideband(namespace: MutableMapping[str, object] | None = None) -> None:
-    """Launch Function 1: Plot all channel data wideband."""
-    _launch("show_function1_raw_wideband", namespace)
-
-
-def show_function2_bandpass_filtered(namespace: MutableMapping[str, object] | None = None) -> None:
-    """Launch Function 2: Plot bandpass filtered wideband."""
-    _launch("show_function2_bandpass_filtered", namespace)
+def show_function2_continuous_traces(namespace: MutableMapping[str, object] | None = None) -> None:
+    """Launch Function 2: Continuous traces (raw or filtered, optional ignore-stim)."""
+    _launch("show_function2_continuous_traces", namespace)
 
 
 def show_function3_stim_triggered_events(namespace: MutableMapping[str, object] | None = None) -> None:
@@ -120,13 +113,8 @@ def show_function3_stim_triggered_events(namespace: MutableMapping[str, object] 
     _launch("show_function3_stim_triggered_events", namespace)
 
 
-def show_function4_recorded_response_only(namespace: MutableMapping[str, object] | None = None) -> None:
-    """Launch Function 4: Plot recorded response only."""
-    _launch("show_function4_recorded_response_only", namespace)
-
-
 def show_function5_power_analysis(namespace: MutableMapping[str, object] | None = None) -> None:
-    """Launch Function 5: Pre/post and event-locked power analysis."""
+    """Launch Function 5: Pre/post neuromodulation power analysis."""
     _launch("show_function5_power_analysis", namespace)
 
 
@@ -142,10 +130,8 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
 
 __all__ = [
     "show_function0_rename_rhs_folders",
-    "show_function1_raw_wideband",
-    "show_function2_bandpass_filtered",
+    "show_function2_continuous_traces",
     "show_function3_stim_triggered_events",
-    "show_function4_recorded_response_only",
     "show_function5_power_analysis",
     "show_function6_session_analysis",
     "show_function7_evoked_response",

@@ -62,6 +62,18 @@ class EvokedConfig:
     gap_baseline_end_ms: float = 250.0
     highpass_hz: float = 250.0
 
+    # Peak analysis. The response window for individual peaks starts after the
+    # *nominal* pulse plus a guard; peaks landing within edge_flag_ms of the
+    # *measured* off-edge (the Keithley often runs long, e.g. 7.5 ms for a
+    # programmed 5) are reported but flagged edge_suspect, never dropped.
+    post_pulse_guard_ms: float = 1.0
+    peak_lowpass_hz: float = 500.0  # zero-phase LP before detection; 0 disables
+    peak_prominence_k: float = 3.0  # x SD of the mean-waveform baseline
+    presence_k: float = 3.0  # x per-epoch baseline SD, per-pulse presence test
+    max_peaks: int = 5
+    peak_search_half_ms: float = 3.0  # +/- window for per-pulse re-measurement
+    edge_flag_ms: float = 1.5
+
     # Post-train sustained change.
     post_train_gap_s: float = 2.0
     post_train_window_s: float = 10.0
@@ -93,6 +105,12 @@ def config_from_text_fields(
     pulse_width_ms: str = "5",
     single_run: str = "",
     max_runs: str = "",
+    post_pulse_guard_ms: str = "",
+    peak_lowpass_hz: str = "",
+    peak_prominence_k: str = "",
+    max_peaks: str = "",
+    peak_search_half_ms: str = "",
+    edge_flag_ms: str = "",
 ) -> EvokedConfig:
     """Build an EvokedConfig from raw widget or CLI strings.
 
@@ -142,6 +160,18 @@ def config_from_text_fields(
             raise ValueError(f"{label} must be positive, got {value}")
         return value
 
+    def _non_negative_float(text: str, label: str, default: float) -> float:
+        cleaned = _clean(text)
+        if cleaned == "":
+            return default
+        try:
+            value = float(cleaned)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be a number, got {cleaned!r}") from exc
+        if value < 0:
+            raise ValueError(f"{label} must not be negative, got {value}")
+        return value
+
     max_runs_text = _clean(max_runs)
     max_runs_value = _positive_int(max_runs_text, "Max runs", 0) if max_runs_text else None
     if max_runs_value == 0:
@@ -154,6 +184,12 @@ def config_from_text_fields(
         expected_pulses=_positive_int(expected_pulses, "Expected pulses", 50),
         pulse_width_ms=_positive_float(pulse_width_ms, "Pulse width (ms)", 5.0),
         max_runs=max_runs_value,
+        post_pulse_guard_ms=_non_negative_float(post_pulse_guard_ms, "Guard (ms)", 1.0),
+        peak_lowpass_hz=_non_negative_float(peak_lowpass_hz, "Peak low-pass (Hz)", 500.0),
+        peak_prominence_k=_positive_float(peak_prominence_k, "Prominence k", 3.0),
+        max_peaks=_positive_int(max_peaks, "Max peaks", 5),
+        peak_search_half_ms=_positive_float(peak_search_half_ms, "Peak search +/- (ms)", 3.0),
+        edge_flag_ms=_non_negative_float(edge_flag_ms, "Edge flag (ms)", 1.5),
     )
 
 

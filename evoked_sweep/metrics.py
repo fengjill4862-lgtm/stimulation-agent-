@@ -44,6 +44,14 @@ class ChannelEvoked:
     post_pulse_fraction: float
     waveform_time_ms: np.ndarray = field(repr=False, default_factory=lambda: np.zeros(0))
     mean_waveform_uV: np.ndarray = field(repr=False, default_factory=lambda: np.zeros(0))
+    # Window-split measures: during = [0, pulse_width + guard), post = the rest
+    # of the response window. The legacy pp/latency above span both windows.
+    during_pp_uV_median: float = float("nan")
+    post_pp_uV_median: float = float("nan")
+    post_pp_uV_iqr: float = float("nan")
+    post_peak_latency_ms_median: float = float("nan")
+    baseline_sd_uV: float = float("nan")
+    epochs_uV: np.ndarray = field(repr=False, default_factory=lambda: np.zeros((0, 0)))
 
 
 @dataclass(frozen=True)
@@ -110,6 +118,13 @@ def evoked_deflection(
         gaps: list[float] = []
         tails: list[float] = []
         stack: list[np.ndarray] = []
+        during_pps: list[float] = []
+        post_pps: list[float] = []
+        post_latencies: list[float] = []
+        baseline_sds: list[float] = []
+        guard_samples = int(
+            round((config.pulse_width_ms + config.post_pulse_guard_ms) / 1000.0 * fs)
+        )
 
         for onset in train.onsets_s:
             window = _epoch_indices(onset, fs, pre_ms, post_ms, n)
@@ -128,6 +143,17 @@ def evoked_deflection(
             peak_index = int(np.argmax(np.abs(response)))
             latencies.append(peak_index / fs * 1000.0)
             stack.append(centred)
+
+            if pre_samples:
+                baseline_sds.append(float(epoch[:pre_samples].std()))
+            during = response[:guard_samples]
+            if during.size:
+                during_pps.append(float(during.max() - during.min()))
+            post = response[guard_samples:]
+            if post.size:
+                post_pps.append(float(post.max() - post.min()))
+                post_index = guard_samples + int(np.argmax(np.abs(post)))
+                post_latencies.append(post_index / fs * 1000.0)
 
             # Fraction of response energy arriving after the pulse should have
             # ended. Pure coupling stops with the pulse; a response outlasts it.
@@ -173,6 +199,18 @@ def evoked_deflection(
                 post_pulse_fraction=float(np.median(tails)) if tails else float("nan"),
                 waveform_time_ms=waveform_time,
                 mean_waveform_uV=waveform,
+                during_pp_uV_median=float(np.median(during_pps)) if during_pps else float("nan"),
+                post_pp_uV_median=float(np.median(post_pps)) if post_pps else float("nan"),
+                post_pp_uV_iqr=(
+                    float(np.subtract(*np.percentile(post_pps, [75, 25])))
+                    if post_pps
+                    else float("nan")
+                ),
+                post_peak_latency_ms_median=(
+                    float(np.median(post_latencies)) if post_latencies else float("nan")
+                ),
+                baseline_sd_uV=float(np.median(baseline_sds)) if baseline_sds else float("nan"),
+                epochs_uV=np.vstack(stack) if stack else np.zeros((0, 0)),
             )
         )
 

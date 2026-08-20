@@ -42,6 +42,12 @@ class RunArtifactEvidence:
     stops_with_pulse: bool
     suspicion: float
     reasons: tuple[str, ...]
+    # Window-split indicators. fast_latency above always trips on the onset
+    # coupling spike; fast_latency_post asks the same question of the post-pulse
+    # window only, which the spike cannot win.
+    fast_latency_post: bool = False
+    coupling_ratio: float = float("nan")  # during-pulse p-p / post-pulse p-p
+    post_response_detected: bool = False  # any non-edge-suspect peak found
 
 
 @dataclass(frozen=True)

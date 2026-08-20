@@ -22,7 +22,12 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
-from plot_rhs_filtered_wideband import bandpass_filter_wideband
+from plot_rhs_filtered_wideband import (
+    bandpass_filter_wideband,
+    blank_and_interpolate as _blank_and_interpolate,
+    merge_sample_windows as _merge_windows,
+    pulse_blank_sample_windows as _pulse_blank_windows_for_epoch,
+)
 from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
     find_pulse_segments,
@@ -597,60 +602,6 @@ def _sliding_window_means(
         for start in range(0, power.size - window_samples + 1, step_samples)
     ]
     return np.asarray(means, dtype=float)
-
-
-def _pulse_blank_windows_for_epoch(
-    pulse_segments: Sequence[tuple[int, int]],
-    epoch_start: int,
-    epoch_end: int,
-    sample_rate_hz: float,
-    blank_window_ms: tuple[float, float],
-) -> list[tuple[int, int]]:
-    start_offset = int(round(blank_window_ms[0] * 1.0e-3 * sample_rate_hz))
-    end_offset = int(round(blank_window_ms[1] * 1.0e-3 * sample_rate_hz))
-    windows: list[tuple[int, int]] = []
-    for pulse_start, pulse_end in pulse_segments:
-        blank_start = pulse_start + start_offset
-        blank_end = pulse_end + end_offset
-        local_start = max(0, blank_start - epoch_start)
-        local_end = min(epoch_end - epoch_start, blank_end - epoch_start)
-        if local_end > local_start:
-            windows.append((local_start, local_end))
-    return _merge_windows(windows)
-
-
-def _merge_windows(windows: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
-    if not windows:
-        return []
-    sorted_windows = sorted(windows)
-    merged: list[tuple[int, int]] = []
-    current_start, current_end = sorted_windows[0]
-    for start, end in sorted_windows[1:]:
-        if start <= current_end:
-            current_end = max(current_end, end)
-        else:
-            merged.append((current_start, current_end))
-            current_start, current_end = start, end
-    merged.append((current_start, current_end))
-    return merged
-
-
-def _blank_and_interpolate(y: np.ndarray, windows: Sequence[tuple[int, int]]) -> np.ndarray:
-    if not windows:
-        return y
-    mask = np.zeros(y.size, dtype=bool)
-    for start, end in windows:
-        mask[max(0, start) : min(y.size, end)] = True
-    if not np.any(mask):
-        return y
-    good = np.flatnonzero(~mask)
-    if good.size < 2:
-        fill_value = float(np.nanmedian(y)) if np.isfinite(y).any() else 0.0
-        y[mask] = fill_value
-        return y
-    bad = np.flatnonzero(mask)
-    y[bad] = np.interp(bad, good, y[good])
-    return y
 
 
 def _window_mean_from_epoch(

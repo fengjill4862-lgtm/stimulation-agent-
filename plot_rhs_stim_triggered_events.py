@@ -1,4 +1,14 @@
-"""Stim-triggered bandpass plots for RHS sessions."""
+"""Stim-triggered bandpass plots for RHS sessions.
+
+Filtering follows the spec-v2 order: each event is epoched with 500 ms of
+padding, pulse and response-blank windows are linearly interpolated away, the
+epoch is bandpassed, and the padding is trimmed. The continuous trace is never
+filtered, so saturating stim artifact cannot ring through the whole recording.
+The epoch/blank/filter pattern matches ``stim_analysis.epoch``; it is
+implemented locally because importing that package here would close an import
+cycle (Function 5's numerics import this module, and stim_analysis imports
+Function 5's).
+"""
 
 from __future__ import annotations
 
@@ -26,12 +36,16 @@ from plot_rhs_filtered_wideband import (
     DASH_TRANSLATION,
     amplitude_mask,
     bandpass_filter_wideband,
+    blank_and_interpolate,
     format_bandpass_filename_label,
     format_bandpass_plot_label,
     masked_envelope_for_display,
+    merge_sample_windows,
+    pulse_blank_sample_windows,
 )
 from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
+    find_pulse_segments,
     sample_slice_for_time_window,
 )
 from rhs_naming import channel_label_collapsed, ms_label, ms_number, number_token, signed_number_token
@@ -140,16 +154,98 @@ def build_stim_triggered_events(
     return events
 
 
-def filter_channel_data(
+def epoch_filter_channel_data(
     channel_data: Sequence[tuple[str, np.ndarray]],
     sample_rate_hz: float,
     band_hz: tuple[float, float] | None,
+    events: Sequence[StimTriggeredEvent],
+    stim_uA: np.ndarray | None,
+    *,
+    pre_time_s: float = 0.0,
+    post_time_window_s: tuple[float, float | None] | None = None,
+    event_time_window: tuple[float, float] | None = None,
+    filter_pad_ms: float = 500.0,
+    pulse_blank_ms: tuple[float, float] = (-1.0, 5.0),
 ) -> list[tuple[str, np.ndarray]]:
-    """Apply the selected frequency setting once for event plotting."""
-    return [
-        (channel_name, bandpass_filter_wideband(raw_uV, sample_rate_hz, band_hz))
-        for channel_name, raw_uV in channel_data
+    """Epoch, blank, then filter each event's display window.
+
+    Returns full-length arrays so the grid renderer can keep slicing by each
+    event's ``sample_slice``; samples outside every display window are NaN and
+    are never rendered. Where a filter pad reaches past the recording, the
+    available segment is reflect-padded. Where consecutive events' display
+    windows overlap, later events overwrite -- the difference is only filter
+    edge effects inside the pad.
+    """
+    if band_hz is None:
+        return [
+            (channel_name, raw_uV.astype(np.float64, copy=False))
+            for channel_name, raw_uV in channel_data
+        ]
+
+    pad = max(0, int(round(filter_pad_ms * 1.0e-3 * sample_rate_hz)))
+    pulse_segments = find_pulse_segments(stim_uA) if stim_uA is not None else []
+
+    windows = [
+        _event_display_window(
+            event,
+            sample_rate_hz,
+            event_time_window=event_time_window,
+            pre_time_s=pre_time_s,
+            post_time_window_s=post_time_window_s,
+        )
+        for event in events
     ]
+
+    filtered_channels: list[tuple[str, np.ndarray]] = []
+    for channel_name, raw_uV in channel_data:
+        x = raw_uV.astype(np.float64, copy=False)
+        n = x.size
+        out = np.full(n, np.nan)
+        for event, window in zip(events, windows):
+            display = window.sample_slice
+            if display.stop <= display.start:
+                continue
+            padded_start = display.start - pad
+            padded_stop = display.stop + pad
+            available_start = max(0, padded_start)
+            available_stop = min(n, padded_stop)
+            if available_stop - available_start < 2:
+                continue
+
+            segment = x[available_start:available_stop].copy()
+            left_pad = available_start - padded_start
+            right_pad = padded_stop - available_stop
+            if left_pad or right_pad:
+                segment = np.pad(segment, (left_pad, right_pad), mode="reflect")
+
+            blank_windows = list(
+                pulse_blank_sample_windows(
+                    pulse_segments, padded_start, padded_stop, sample_rate_hz, pulse_blank_ms
+                )
+            )
+            if window.response_blank_s is not None:
+                blank_start_s, blank_stop_s = window.response_blank_s
+                local_start = (
+                    event.start_sample
+                    + int(round(blank_start_s * sample_rate_hz))
+                    - padded_start
+                )
+                local_stop = (
+                    event.start_sample
+                    + int(round(blank_stop_s * sample_rate_hz))
+                    - padded_start
+                )
+                local_start = max(0, local_start)
+                local_stop = min(padded_stop - padded_start, local_stop)
+                if local_stop > local_start:
+                    blank_windows.append((local_start, local_stop))
+
+            segment = blank_and_interpolate(segment, merge_sample_windows(blank_windows))
+            filtered = bandpass_filter_wideband(segment, sample_rate_hz, band_hz)
+            out[display] = filtered[pad : pad + (display.stop - display.start)]
+        filtered_channels.append((channel_name, out))
+
+    return filtered_channels
 
 
 def default_stim_events_grid_output_path(

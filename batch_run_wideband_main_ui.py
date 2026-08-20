@@ -52,7 +52,7 @@ from plot_rhs_stim_triggered_events import (
     parse_post_time_ms,
     build_stim_triggered_events,
     default_stim_events_grid_output_path,
-    filter_channel_data,
+    epoch_filter_channel_data,
     plot_stim_triggered_events_grid,
 )
 from rhs_files import atomic_write_figure, atomic_write_text
@@ -250,7 +250,18 @@ def run_event_plot(
     if skip_existing and all(output_path.exists() for _start, _chunk_events, output_path in chunks):
         return [output_path for _start, _chunk_events, output_path in chunks], len(events), stim_channel_name
 
-    filtered_channel_data = filter_channel_data(raw_channel_data, data.sample_rate_hz, band_hz)
+    filtered_channel_data = epoch_filter_channel_data(
+        raw_channel_data,
+        data.sample_rate_hz,
+        band_hz,
+        events,
+        stim_uA_for_events,
+        pre_time_s=pre_time_ms / 1000.0,
+        post_time_window_s=(
+            post_window_ms[0] / 1000.0,
+            None if post_window_ms[1] is None else post_window_ms[1] / 1000.0,
+        ),
+    )
     output_paths: list[Path] = []
     for _start, chunk_events, output_path in chunks:
         if skip_existing and output_path.exists():

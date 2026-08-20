@@ -27,7 +27,6 @@ from plot_rhs_raw_wideband_with_stim_legend import (
 )
 from rhs_stim import NO_STIM_IN_FOLDER, read_selected_channels, resolve_stim_channel
 from plot_rhs_filtered_wideband import (
-    bandpass_warning,
     format_bandpass_status,
     parse_amplitude_range,
     parse_frequency_range,
@@ -36,11 +35,12 @@ from plot_rhs_stim_triggered_events import (
     build_stim_triggered_events,
     event_window_label,
     default_stim_events_grid_output_path,
-    filter_channel_data,
+    epoch_filter_channel_data,
     parse_post_time_ms,
     parse_pre_time_ms,
     plot_stim_triggered_events_grid,
 )
+from rhs_files import atomic_write_bytes
 
 
 def show_function3_stim_triggered_events(
@@ -246,8 +246,14 @@ def show_function3_stim_triggered_events(
             f"with train gap {train_gap_ms:g} ms; {format_bandpass_status(band_hz)}..."
         )
         try:
-            filtered_channel_data = filter_channel_data(
-                raw_channel_data, sample_rate_hz, band_hz
+            filtered_channel_data = epoch_filter_channel_data(
+                raw_channel_data,
+                sample_rate_hz,
+                band_hz,
+                events,
+                stim_uA_for_events,
+                pre_time_s=pre_time_s,
+                post_time_window_s=post_time_window_s,
             )
         except ValueError as exc:
             event_status.value = f"<b style='color:#b00020'>{exc}</b>"
@@ -325,17 +331,17 @@ def show_function3_stim_triggered_events(
             if post_window_ms[0] > 0
             else ""
         )
-        warning = bandpass_warning(band_hz)
-        warning_html = (
-            f" <b style='color:#b26a00'>Warning:</b> {warning}" if warning else ""
+        pipeline_note = (
+            "; epoch -> blank -> filter (pad 500 ms, pulses blanked -1/+5 ms)"
+            if band_hz is not None
+            else ""
         )
         event_status.value = (
             f"Generated one combined PNG preview with {len(events)} event(s) "
             f"from {len(loaded)} RHS file(s), using {stim_detection_channel} stim_data "
             f"for grouped onsets ({first_onset:g} to {last_onset:g} s; "
             f"train gap {train_gap_ms:g} ms; window {window_label}{blank_note}; "
-            f"stim current {'shown' if show_stim_current else 'hidden'})."
-            f"{warning_html}"
+            f"stim current {'shown' if show_stim_current else 'hidden'}{pipeline_note})."
         )
 
     def save_event_pngs(_button=None) -> None:
@@ -349,10 +355,7 @@ def show_function3_stim_triggered_events(
             )
             return
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = output_path.with_name(f".{output_path.stem}.tmp{output_path.suffix}")
-        temp_path.write_bytes(preview_png)
-        os.replace(temp_path, output_path)
+        atomic_write_bytes(output_path, preview_png)
 
         event_target_label.value = f"<b>Saved:</b> {output_path}"
         event_status.value = (

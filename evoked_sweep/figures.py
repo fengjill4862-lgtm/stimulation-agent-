@@ -281,8 +281,9 @@ def _annotate_panel(ax, result: SessionResult, run, evoked, channel_peaks) -> No
                 f"{peak.label} {peak.latency_ms:.1f} ms {peak.amplitude_uV:+.0f} uV{suffix}",
                 (peak.latency_ms, peak.amplitude_uV),
                 textcoords="offset points",
-                xytext=(4, 8 if peak.polarity > 0 else -14),
+                xytext=(7, -3),  # beside the marker, so it stays inside the axes
                 fontsize=6,
+                annotation_clip=True,
             )
     ax.set_xlabel("time from pulse onset (ms)")
     ax.set_ylabel("uV")
@@ -396,6 +397,8 @@ def peak_dose_response_figure(result: SessionResult) -> bytes:
         if log_x:
             ax.set_xscale("log")
             ax.set_yscale("log")
+        else:
+            ax.set_xticks(currents)  # jitter separates points; ticks stay honest
         ax.set_xlabel("|current| (mA)")
         ax.set_ylabel("|peak amplitude| (uV)")
         ax.set_title(wiring, fontsize=9)

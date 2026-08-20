@@ -64,6 +64,7 @@ _RELOAD_CHAIN = (
     "evoked_sweep.load",
     "evoked_sweep.pulses",
     "evoked_sweep.metrics",
+    "evoked_sweep.peaks",
     "evoked_sweep.artifact",
     "evoked_sweep.pipeline",
     "evoked_sweep.figures",

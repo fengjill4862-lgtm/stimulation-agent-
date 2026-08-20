@@ -41,6 +41,8 @@ PREVIEW_FIGURES = (
     "fig2_pulse_waveforms.png",
     "fig3_band_power.png",
     "fig4_artifact_evidence.png",
+    "fig5_peaks.png",
+    "fig6_peak_dose_response.png",
 )
 
 
@@ -78,6 +80,28 @@ def _timing_table(result) -> str:
     return "\n".join(lines)
 
 
+def _peak_table(result) -> str:
+    if not result.peak_rows:
+        return "no peaks detected in the post-pulse window"
+    header = (
+        f"{'run':30s} {'mA':>7s} {'ch':>6s} {'peak':>4s} {'lat ms':>7s} {'-off ms':>8s} "
+        f"{'amp uV':>8s} {'w ms':>6s} {'jit ms':>7s} {'present':>7s} {'edge?':>5s}"
+    )
+    lines = [header, "-" * len(header)]
+    for row in result.peak_rows:
+        amplitude = row.get("amplitude_mA")
+        lines.append(
+            f"{str(row['run'])[:30]:30s} "
+            f"{('' if amplitude is None else f'{amplitude:+.3g}'):>7s} "
+            f"{row['channel']:>6s} {row['peak_label']:>4s} "
+            f"{row['latency_ms']:>7.2f} {row['latency_from_offset_ms']:>8.2f} "
+            f"{row['amp_median_uV']:>8.1f} {row['width_ms']:>6.2f} "
+            f"{row['latency_jitter_ms']:>7.2f} {str(row['present']):>7s} "
+            f"{('yes' if row['edge_suspect'] else ''):>5s}"
+        )
+    return "\n".join(lines)
+
+
 def show_function7_evoked_response(namespace: MutableMapping[str, object] | None = None) -> None:
     """Display Function 7 widgets inside VS Code/Jupyter."""
     seed = _session_seed(namespace)
@@ -108,6 +132,24 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
     max_runs_int = widgets.IntText(
         value=0, description="Max runs", layout=widgets.Layout(width="170px"), style={"description_width": "75px"}
     )
+    guard_float = widgets.FloatText(
+        value=1.0, description="Guard (ms)", layout=widgets.Layout(width="160px"), style={"description_width": "80px"}
+    )
+    lowpass_float = widgets.FloatText(
+        value=500.0, description="LP (Hz)", layout=widgets.Layout(width="150px"), style={"description_width": "60px"}
+    )
+    prominence_float = widgets.FloatText(
+        value=3.0, description="Prom k", layout=widgets.Layout(width="140px"), style={"description_width": "60px"}
+    )
+    max_peaks_int = widgets.IntText(
+        value=5, description="Max peaks", layout=widgets.Layout(width="160px"), style={"description_width": "80px"}
+    )
+    search_float = widgets.FloatText(
+        value=3.0, description="Search +/- ms", layout=widgets.Layout(width="180px"), style={"description_width": "100px"}
+    )
+    edge_float = widgets.FloatText(
+        value=1.5, description="Edge (ms)", layout=widgets.Layout(width="160px"), style={"description_width": "80px"}
+    )
 
     preview_button = generate_button("Generate Preview", width="170px")
     save_btn = save_button("Save Bundle", width="130px")
@@ -124,6 +166,9 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                 folder_text,
                 widgets.HBox([mode_dropdown, channels_text, max_runs_int]),
                 widgets.HBox([pulses_int, width_float]),
+                widgets.HBox(
+                    [guard_float, lowpass_float, prominence_float, max_peaks_int, search_float, edge_float]
+                ),
                 widgets.HTML(
                     value=(
                         "<b>Evoked response to external (Keithley) stimulation, from RHD "
@@ -132,7 +177,10 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                         "amplifier trace, and every run reports whether that fit is trustworthy. "
                         "Measures per-pulse deflection, band power (train vs baseline) and "
                         "post-train change, and flags deflections that look like stimulus "
-                        "coupling rather than a response. Single run mode checks one folder in "
+                        "coupling rather than a response. Individual peaks (N1/P1/...) are "
+                        "detected after the pulse plus a guard, each with amplitude, latency, "
+                        "width and per-pulse stability; peaks near the measured off-edge are "
+                        "flagged, not dropped. Single run mode checks one folder in "
                         "seconds; whole session reads about 1.9 GB. Preview writes nothing; "
                         "Save Bundle writes the whole output set atomically."
                     )
@@ -169,6 +217,12 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                 pulse_width_ms=str(width_float.value),
                 single_run="1" if single else "",
                 max_runs=str(max_runs_int.value or ""),
+                post_pulse_guard_ms=str(guard_float.value),
+                peak_lowpass_hz=str(lowpass_float.value),
+                peak_prominence_k=str(prominence_float.value),
+                max_peaks=str(max_peaks_int.value),
+                peak_search_half_ms=str(search_float.value),
+                edge_flag_ms=str(edge_float.value),
             )
         except ValueError as exc:
             status.value = error_html(str(exc))
@@ -209,6 +263,10 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
             display(widgets.HTML(value="<b>Recovered timing and per-pulse response</b>"))
             display(
                 widgets.HTML(value=f"<pre style='font-size:11px'>{html.escape(_timing_table(result))}</pre>")
+            )
+            display(widgets.HTML(value="<b>Detected peaks (post-pulse window)</b>"))
+            display(
+                widgets.HTML(value=f"<pre style='font-size:11px'>{html.escape(_peak_table(result))}</pre>")
             )
             for name in PREVIEW_FIGURES:
                 png = figures.get(name)

@@ -27,7 +27,9 @@ from .config import EvokedConfig
 from .load import load_run
 from .metrics import band_power, evoked_deflection
 from .naming import discover_runs, parse_amplitude, parse_wiring
-from .pulses import recover_pulses
+from .peaks import analyse_channel_peaks
+from .pipeline import run_single
+from .pulses import PulseTrain, recover_pulses
 
 FS = 5000.0
 SAMPLES_PER_BLOCK = 128
@@ -70,7 +72,10 @@ def make_run(
     ``shape='coupling'`` puts a rectangle exactly under the pulse -- what direct
     current injection looks like. ``shape='response'`` puts a delayed decaying
     transient after it -- what a synaptic response looks like. The artifact
-    criteria have to tell these apart.
+    criteria have to tell these apart. ``shape='ep'`` is the full menagerie the
+    peak analysis must sort out: the coupling rectangle, an onset spike, an
+    off-edge transient at 6.5 ms, then two genuine components -- N at 9 ms
+    (-150 uV, sigma 1 ms) and P at 15 ms (+300 uV, sigma 2.5 ms).
     """
     rng = np.random.default_rng(seed)
     n_blocks = int(duration_s * FS / SAMPLES_PER_BLOCK)
@@ -83,9 +88,22 @@ def make_run(
     onsets = first_onset_s + np.arange(n_pulses) * period_s
     width = int(round(pulse_width_ms / 1000.0 * FS))
 
+    if shape == "ep":
+        length = int(round(0.060 * FS))
+        t_ms = np.arange(length) / FS * 1000.0
+        template = np.zeros(length)
+        template[t_ms < pulse_width_ms] += amplitude_uV  # coupling rectangle
+        template[t_ms < 0.6] -= 400.0  # onset spike
+        template -= 120.0 * np.exp(-0.5 * ((t_ms - 6.5) / 0.4) ** 2)  # off-edge
+        template -= 150.0 * np.exp(-0.5 * ((t_ms - 9.0) / 1.0) ** 2)  # N component
+        template += 300.0 * np.exp(-0.5 * ((t_ms - 15.0) / 2.5) ** 2)  # P component
+
     for onset in onsets:
         start = int(round(onset * FS))
-        if shape == "coupling":
+        if shape == "ep":
+            stop = min(n_samples, start + template.size)
+            signal[start:stop] += template[: stop - start]
+        elif shape == "coupling":
             stop = min(n_samples, start + width)
             signal[start:stop] += amplitude_uV
         else:
@@ -281,6 +299,141 @@ def test_artifact_criteria_separate_shapes(tmp: Path) -> None:
         )
 
 
+def test_peak_windows_and_detection(tmp: Path) -> None:
+    print("per-peak analysis on a known multi-peak EP")
+    session = tmp / "peaks"
+    config = _config(session)
+
+    ep_folder = session / "cfg stim 1 stim ground 2 recording ground 3" / "+0_5mA_260819_140000"
+    coupling_folder = session / "cfg stim 1 stim ground 2 recording ground 3" / "+0_5mA_260819_150000"
+    truths = {
+        ep_folder.name: make_run(ep_folder, amplitude_uV=800.0, shape="ep", seed=41),
+        coupling_folder.name: make_run(coupling_folder, amplitude_uV=800.0, shape="coupling", seed=42),
+    }
+
+    # Epoch on the true onsets: the peak measures are being tested here, not the
+    # comb fit, whose own accuracy has its own tests above.
+    evoked_by_name = {}
+    for condition in discover_runs(session):
+        loaded = load_run(condition, config)
+        truth = truths[condition.run_folder.name]
+        train = PulseTrain(
+            onsets_s=truth,
+            period_s=0.259,
+            train_start_s=float(truth[0]),
+            train_end_s=float(truth[-1] + 0.005),
+            width_ms=5.0,
+            jitter_ms=0.0,
+            n_detected=truth.size,
+            ok=True,
+        )
+        evoked = evoked_deflection(loaded, train, config)
+        if evoked:
+            evoked_by_name[condition.run_folder.name] = evoked[0]
+
+    ep = evoked_by_name.get(ep_folder.name)
+    coupling = evoked_by_name.get(coupling_folder.name)
+    check(ep is not None and coupling is not None, "both synthetic runs measured")
+    if ep is None or coupling is None:
+        return
+
+    # Window split: the rectangle plus onset spike dominates the during window,
+    # the N/P components the post window, and the post latency must ignore the
+    # onset spike entirely.
+    check(ep.during_pp_uV_median > 700.0, f"during-pulse p-p sees the rectangle ({ep.during_pp_uV_median:.0f} uV)")
+    check(
+        250.0 < ep.post_pp_uV_median < 700.0,
+        f"post-pulse p-p sees the components, not the rectangle ({ep.post_pp_uV_median:.0f} uV)",
+    )
+    check(
+        abs(ep.post_peak_latency_ms_median - 15.0) < 1.5,
+        f"post-window latency lands on the P component ({ep.post_peak_latency_ms_median:.2f} ms)",
+    )
+    check(np.isfinite(ep.baseline_sd_uV) and ep.baseline_sd_uV > 0, "single-trial baseline SD measured")
+
+    # Detection with a deterministic measured off-edge: the 6.5 ms transient is
+    # flagged, the two genuine components are not.
+    # Four extrema live after the pulse: the off-edge transient, the rebound
+    # bump between the two negative components, then the genuine N and P.
+    found = analyse_channel_peaks(ep, FS, config, measured_width_ms=6.5)
+    check(found.n_peaks == 4, f"four post-pulse peaks found (got {found.n_peaks})")
+    if found.n_peaks == 4:
+        edge, _bump, n_component, p_component = found.peaks
+        check(edge.edge_suspect, "off-edge transient flagged edge_suspect")
+        check(abs(edge.latency_ms - 6.5) < 1.0, f"off-edge transient at 6.5 ms (got {edge.latency_ms:.2f})")
+        check(not n_component.edge_suspect and not p_component.edge_suspect, "genuine components not flagged")
+        check(
+            (edge.label, n_component.label, p_component.label) == ("N1", "N2", "P2"),
+            f"labels by polarity and order (got {[p.label for p in found.peaks]})",
+        )
+        check(abs(n_component.latency_ms - 9.0) < 1.0, f"N component at 9 ms (got {n_component.latency_ms:.2f})")
+        check(abs(p_component.latency_ms - 15.0) < 1.0, f"P component at 15 ms (got {p_component.latency_ms:.2f})")
+        # The P tail reaches back under the N component (+17 uV at 9 ms), so
+        # the composite trough is shallower than the -150 uV component alone.
+        check(
+            abs(n_component.amplitude_uV + 150.0) < 40.0,
+            f"N amplitude near -150 uV (got {n_component.amplitude_uV:.1f})",
+        )
+        check(
+            abs(p_component.amplitude_uV - 300.0) < 0.15 * 300.0,
+            f"P amplitude within 15% (got {p_component.amplitude_uV:.1f})",
+        )
+        check(0.5 < n_component.width_ms < 5.0, f"N width sensible ({n_component.width_ms:.2f} ms)")
+        check(2.0 < p_component.width_ms < 10.0, f"P width sensible ({p_component.width_ms:.2f} ms)")
+        check(n_component.present and p_component.present, "both components pass the presence test")
+        check(p_component.latency_jitter_ms < 2.0, f"P latency jitter small ({p_component.latency_jitter_ms:.2f} ms)")
+        check(
+            0.7 < p_component.adaptation_ratio < 1.3,
+            f"no adaptation in a stationary train ({p_component.adaptation_ratio:.2f})",
+        )
+
+    evidence = run_evidence(
+        ep.channel,
+        ep.peak_latency_ms_median,
+        ep.post_pulse_fraction,
+        post_peak_latency_ms=ep.post_peak_latency_ms_median,
+        during_pp_uV=ep.during_pp_uV_median,
+        post_pp_uV=ep.post_pp_uV_median,
+        n_post_peaks=found.n_peaks_clean,
+        pulse_width_ms=config.pulse_width_ms,
+    )
+    check(evidence.post_response_detected, "EP run reports a detected post-pulse response")
+    check(not evidence.fast_latency_post, "post-window latency is not pulse-locked")
+    check(
+        np.isfinite(evidence.coupling_ratio) and evidence.coupling_ratio > 1.0,
+        f"during/post ratio finite and > 1 ({evidence.coupling_ratio:.2f})",
+    )
+
+    bare = analyse_channel_peaks(coupling, FS, config, measured_width_ms=5.0)
+    check(bare.n_peaks_clean == 0, f"pure coupling yields no clean post-pulse peaks (got {bare.n_peaks_clean})")
+
+    # Full pipeline regression: the legacy columns survive and the new ones appear.
+    single = run_single(EvokedConfig(session_folder=ep_folder, single_run=True))
+    check(bool(single.rows), "single-run pipeline produced rows")
+    if single.rows:
+        row = single.rows[0]
+        legacy = (
+            "run", "wiring", "channel", "amplitude_mA", "evoked_pp_uV", "evoked_pp_iqr_uV",
+            "peak_latency_ms", "gap_baseline_pp_uV", "pre_train_pp_uV", "snr_vs_gap",
+            "post_pulse_fraction", "artifact_fast_latency", "artifact_suspicion",
+        )
+        missing = [key for key in legacy if key not in row]
+        check(not missing, f"legacy runs.csv columns intact (missing: {missing})")
+        added = (
+            "evoked_pp_during_uV", "evoked_pp_post_uV", "post_peak_latency_ms",
+            "baseline_sd_uV", "n_peaks", "n_peaks_clean", "artifact_fast_latency_post",
+            "artifact_coupling_ratio", "artifact_post_response_detected",
+        )
+        missing_new = [key for key in added if key not in row]
+        check(not missing_new, f"new runs.csv columns present (missing: {missing_new})")
+    check(bool(single.peak_rows), "single-run pipeline produced peak rows")
+    if single.peak_rows:
+        check(
+            any(r["peak_label"].startswith("P") for r in single.peak_rows),
+            "pipeline peak rows include a positive component",
+        )
+
+
 def test_band_power_excludes_the_comb(tmp: Path) -> None:
     print("band power sees injected gamma, not the pulse comb")
     session = tmp / "bands"
@@ -322,6 +475,7 @@ def main() -> int:
         test_invisible_stimulus_is_flagged(tmp)
         test_response_scales_and_artifact_separates(tmp)
         test_artifact_criteria_separate_shapes(tmp)
+        test_peak_windows_and_detection(tmp)
         test_band_power_excludes_the_comb(tmp)
 
     print()

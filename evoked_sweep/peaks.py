@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy import signal
+from scipy.ndimage import gaussian_filter1d
 
 from .config import EvokedConfig
 from .metrics import ChannelEvoked
@@ -58,12 +59,27 @@ class ChannelPeaks:
     smoothed_mean_uV: np.ndarray = field(repr=False, default_factory=lambda: np.zeros(0))
 
 
+def _robust_sd(x: np.ndarray) -> float:
+    """SD estimated from the MAD, so a stray transient in the baseline -- an
+    imperfect onset fit, the tail of the previous pulse -- cannot inflate the
+    detection threshold the way a plain standard deviation would."""
+    if x.size == 0:
+        return float("nan")
+    return float(1.4826 * np.median(np.abs(x - np.median(x))))
+
+
 def _smooth(x: np.ndarray, fs: float, cutoff_hz: float) -> np.ndarray:
-    """Zero-phase low-pass; identity when disabled or when fs is too low."""
+    """Gaussian low-pass with a -3 dB point at ``cutoff_hz``.
+
+    A Gaussian rather than a Butterworth because a sharp Butterworth rings
+    around the pulse edges -- an 800 uV step leaves ~10% over/undershoot that
+    the peak detector would then report as peaks. A Gaussian's step response
+    is monotone, so it can never invent one. Identity when disabled.
+    """
     if cutoff_hz <= 0 or cutoff_hz >= fs / 2.0 or x.shape[-1] < 30:
         return x
-    sos = signal.butter(4, cutoff_hz / (fs / 2.0), btype="lowpass", output="sos")
-    return signal.sosfiltfilt(sos, x, axis=-1)
+    sigma_samples = 0.1325 / cutoff_hz * fs  # |H| = exp(-2 pi^2 sigma^2 f^2)
+    return gaussian_filter1d(x, sigma_samples, axis=-1, mode="nearest")
 
 
 def _label_peaks(entries: list[tuple[int, int, float, float]]) -> list[str]:
@@ -98,10 +114,17 @@ def analyse_channel_peaks(
     smoothed = _smooth(mean.astype(np.float64), fs, config.peak_lowpass_hz)
 
     baseline = smoothed[time_ms < 0.0]
-    baseline_sd = float(baseline.std()) if baseline.size else float("nan")
-    threshold = max(
-        config.peak_prominence_k * baseline_sd if np.isfinite(baseline_sd) else 0.0, 2.0
+    baseline_sd = _robust_sd(baseline)
+    # The averaged waveform's noise floor is the standard error across pulses;
+    # the baseline MAD catches structure that averaging did not remove. The
+    # larger of the two sets the scale, k sets the margin, 2 uV is the floor.
+    sem = (
+        evoked.baseline_sd_uV / np.sqrt(max(evoked.n_pulses_used, 1))
+        if np.isfinite(evoked.baseline_sd_uV)
+        else float("nan")
     )
+    scales = [value for value in (baseline_sd, sem) if np.isfinite(value)]
+    threshold = max(config.peak_prominence_k * max(scales) if scales else 0.0, 2.0)
 
     window_start_ms = config.pulse_width_ms + config.post_pulse_guard_ms
     in_window = (time_ms >= window_start_ms) & (time_ms <= config.response_window_ms)

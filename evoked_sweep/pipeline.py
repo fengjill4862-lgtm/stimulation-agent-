@@ -29,6 +29,7 @@ from .metrics import (
     post_train_change,
 )
 from .naming import RunCondition, discover_runs
+from .peaks import ChannelPeaks, analyse_channel_peaks
 from .pulses import PulseTrain, recover_pulses
 
 ProgressCallback = Callable[[str], None]
@@ -41,6 +42,7 @@ class RunResult:
     condition: RunCondition
     train: PulseTrain | None = None
     evoked: list[ChannelEvoked] = field(default_factory=list)
+    peaks: list[ChannelPeaks] = field(default_factory=list)
     bands: list[ChannelBands] = field(default_factory=list)
     post_train: list[ChannelPostTrain] = field(default_factory=list)
     evidence: list[artifact_module.RunArtifactEvidence] = field(default_factory=list)
@@ -62,6 +64,7 @@ class SessionResult:
     config: EvokedConfig
     runs: list[RunResult] = field(default_factory=list)
     rows: list[dict] = field(default_factory=list)
+    peak_rows: list[dict] = field(default_factory=list)
     sweep: list[artifact_module.SweepArtifactEvidence] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -98,10 +101,28 @@ def analyse_run(
             return result
 
         result.evoked = evoked_deflection(loaded, train, config)
+        result.peaks = [
+            analyse_channel_peaks(e, loaded.sample_rate_hz, config, train.width_ms)
+            for e in result.evoked
+        ]
         result.bands = band_power(loaded, train, config)
         result.post_train = post_train_change(loaded, train, config)
+        peaks_by_channel = {p.channel: p for p in result.peaks}
         result.evidence = [
-            artifact_module.run_evidence(e.channel, e.peak_latency_ms_median, e.post_pulse_fraction)
+            artifact_module.run_evidence(
+                e.channel,
+                e.peak_latency_ms_median,
+                e.post_pulse_fraction,
+                post_peak_latency_ms=e.post_peak_latency_ms_median,
+                during_pp_uV=e.during_pp_uV_median,
+                post_pp_uV=e.post_pp_uV_median,
+                n_post_peaks=(
+                    peaks_by_channel[e.channel].n_peaks_clean
+                    if e.channel in peaks_by_channel
+                    else 0
+                ),
+                pulse_width_ms=config.pulse_width_ms,
+            )
             for e in result.evoked
         ]
     except Exception as exc:  # noqa: BLE001
@@ -117,12 +138,14 @@ def _rows_for(result: RunResult, config: EvokedConfig) -> list[dict]:
     bands_by_channel = {b.channel: b for b in result.bands}
     post_by_channel = {p.channel: p for p in result.post_train}
     evidence_by_channel = {e.channel: e for e in result.evidence}
+    peaks_by_channel = {p.channel: p for p in result.peaks}
 
     rows: list[dict] = []
     for evoked in result.evoked:
         bands = bands_by_channel.get(evoked.channel)
         post = post_by_channel.get(evoked.channel)
         evidence = evidence_by_channel.get(evoked.channel)
+        peaks = peaks_by_channel.get(evoked.channel)
 
         row = {
             "run": condition.raw_name,
@@ -169,8 +192,54 @@ def _rows_for(result: RunResult, config: EvokedConfig) -> list[dict]:
             row["artifact_stops_with_pulse"] = evidence.stops_with_pulse
             row["artifact_suspicion"] = evidence.suspicion
             row["artifact_reasons"] = "; ".join(evidence.reasons)
+        # Window-split and per-peak summary columns, appended after the legacy
+        # set so existing runs.csv consumers keep their column meanings.
+        row["evoked_pp_during_uV"] = evoked.during_pp_uV_median
+        row["evoked_pp_post_uV"] = evoked.post_pp_uV_median
+        row["evoked_pp_post_iqr_uV"] = evoked.post_pp_uV_iqr
+        row["post_peak_latency_ms"] = evoked.post_peak_latency_ms_median
+        row["baseline_sd_uV"] = evoked.baseline_sd_uV
+        row["n_peaks"] = peaks.n_peaks if peaks else 0
+        row["n_peaks_clean"] = peaks.n_peaks_clean if peaks else 0
+        if evidence is not None:
+            row["artifact_fast_latency_post"] = evidence.fast_latency_post
+            row["artifact_coupling_ratio"] = evidence.coupling_ratio
+            row["artifact_post_response_detected"] = evidence.post_response_detected
         rows.append(row)
 
+    return rows
+
+
+def _peak_rows_for(result: RunResult) -> list[dict]:
+    """Flatten one run into one row per channel and detected peak (long format)."""
+    condition = result.condition
+    rows: list[dict] = []
+    for channel_peaks in result.peaks:
+        for peak in channel_peaks.peaks:
+            rows.append(
+                {
+                    "run": condition.raw_name,
+                    "wiring": condition.wiring.label,
+                    "channel": channel_peaks.channel,
+                    "amplitude_mA": condition.amplitude_mA,
+                    "abs_amplitude_mA": condition.abs_amplitude_mA,
+                    "polarity": condition.polarity,
+                    "peak_label": peak.label,
+                    "peak_polarity": peak.polarity,
+                    "latency_ms": peak.latency_ms,
+                    "latency_from_offset_ms": peak.latency_from_offset_ms,
+                    "edge_suspect": peak.edge_suspect,
+                    "amplitude_uV": peak.amplitude_uV,
+                    "width_ms": peak.width_ms,
+                    "prominence_uV": peak.prominence_uV,
+                    "amp_median_uV": peak.amp_median_uV,
+                    "amp_iqr_uV": peak.amp_iqr_uV,
+                    "latency_jitter_ms": peak.latency_jitter_ms,
+                    "present": peak.present,
+                    "adaptation_ratio": peak.adaptation_ratio,
+                    "amp_slope_uV_per_pulse": peak.amp_slope_uV_per_pulse,
+                }
+            )
     return rows
 
 
@@ -264,6 +333,7 @@ def run_session(config: EvokedConfig, progress: ProgressCallback | None = None) 
 
     for run_result in result.runs:
         result.rows.extend(_rows_for(run_result, config))
+        result.peak_rows.extend(_peak_rows_for(run_result))
 
     result.sweep = _sweep_evidence(result.rows)
 
@@ -308,6 +378,7 @@ def run_single(config: EvokedConfig, progress: ProgressCallback | None = None) -
     run_result = analyse_run(condition, config)
     result.runs.append(run_result)
     result.rows.extend(_rows_for(run_result, config))
+    result.peak_rows.extend(_peak_rows_for(run_result))
     result.notes.append("Single-run mode: no session-wide period prior was available.")
     if progress is not None:
         progress("done")
@@ -323,6 +394,7 @@ def render_outputs(result: SessionResult) -> list[tuple[Path, bytes | str]]:
         (output_dir / "verdict.txt", summary.verdict_text(result)),
         (output_dir / "runs.csv", summary.runs_csv(result)),
         (output_dir / "conditions.csv", summary.conditions_csv(result)),
+        (output_dir / "peaks.csv", summary.peaks_csv(result)),
     ]
     payloads.extend(figures.render_all(result, output_dir))
     return payloads

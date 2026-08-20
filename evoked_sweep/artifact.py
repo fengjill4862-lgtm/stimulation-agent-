@@ -64,8 +64,17 @@ class SweepArtifactEvidence:
     polarity_asymmetry: float
 
 
-def run_evidence(channel: str, peak_latency_ms: float, post_pulse_fraction: float) -> RunArtifactEvidence:
-    """Score one run/channel on the two indicators available within a run."""
+def run_evidence(
+    channel: str,
+    peak_latency_ms: float,
+    post_pulse_fraction: float,
+    post_peak_latency_ms: float = float("nan"),
+    during_pp_uV: float = float("nan"),
+    post_pp_uV: float = float("nan"),
+    n_post_peaks: int = 0,
+    pulse_width_ms: float = 5.0,
+) -> RunArtifactEvidence:
+    """Score one run/channel on the indicators available within a run."""
     reasons: list[str] = []
 
     fast = bool(np.isfinite(peak_latency_ms) and peak_latency_ms <= COUPLING_LATENCY_MS)
@@ -76,12 +85,32 @@ def run_evidence(channel: str, peak_latency_ms: float, post_pulse_fraction: floa
     if stops:
         reasons.append(f"only {post_pulse_fraction * 100:.0f}% of energy outlasts the pulse")
 
+    fast_post = bool(
+        np.isfinite(post_peak_latency_ms)
+        and (post_peak_latency_ms - pulse_width_ms) <= COUPLING_LATENCY_MS
+    )
+    if fast_post:
+        reasons.append(
+            f"post-pulse peak at {post_peak_latency_ms:.2f} ms, still locked to the pulse edge"
+        )
+
+    ratio = float("nan")
+    if np.isfinite(during_pp_uV) and np.isfinite(post_pp_uV) and post_pp_uV > 0:
+        ratio = during_pp_uV / post_pp_uV
+
+    detected = bool(n_post_peaks > 0)
+    if detected:
+        reasons.append(f"{n_post_peaks} distinct post-pulse peak(s) beyond the off-edge")
+
     return RunArtifactEvidence(
         channel=channel,
         fast_latency=fast,
         stops_with_pulse=stops,
         suspicion=float(fast + stops) / 2.0,
         reasons=tuple(reasons),
+        fast_latency_post=fast_post,
+        coupling_ratio=float(ratio),
+        post_response_detected=detected,
     )
 
 

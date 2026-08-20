@@ -45,6 +45,20 @@ def runs_csv(result: SessionResult) -> str:
     return buffer.getvalue()
 
 
+def peaks_csv(result: SessionResult) -> str:
+    """One row per run, channel and detected peak (long format)."""
+    rows = result.peak_rows
+    if not rows:
+        return "no peaks detected\n"
+    buffer = io.StringIO()
+    fieldnames = _ordered_fieldnames(rows)
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({key: _format(row.get(key)) for key in fieldnames})
+    return buffer.getvalue()
+
+
 def conditions_csv(result: SessionResult) -> str:
     """One row per wiring configuration and channel: the dose-response fit."""
     buffer = io.StringIO()
@@ -149,6 +163,31 @@ def verdict_text(result: SessionResult) -> str:
             lines.append(f"  {wiring:40s} {np.mean(values):.2f}  (n={len(values)})")
         lines.append("")
 
+    if result.peak_rows:
+        lines.append("Post-pulse peaks, per wiring configuration")
+        lines.append("-" * 70)
+        lines.append("Peaks are detected after the nominal pulse plus a guard; a peak within")
+        lines.append(f"{config.edge_flag_ms:.1f} ms of the measured off-edge is marked (edge?) because it may")
+        lines.append("be the stimulator turn-off, not tissue. The legacy latency column still")
+        lines.append("spans the whole response window and can land on the onset spike by design.")
+        by_wiring_label: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        for row in result.peak_rows:
+            by_wiring_label[(row["wiring"], row["peak_label"])].append(row)
+        for (wiring, label), group in sorted(
+            by_wiring_label.items(), key=lambda item: (item[0][0], np.median([g["latency_ms"] for g in item[1]]))
+        ):
+            latencies = [g["latency_ms"] for g in group]
+            amplitudes = [g["amp_median_uV"] for g in group if np.isfinite(g["amp_median_uV"])]
+            present = sum(1 for g in group if g["present"])
+            edge = sum(1 for g in group if g["edge_suspect"])
+            amp_text = f"{np.median(amplitudes):+8.1f} uV" if amplitudes else "     n/a"
+            edge_text = f"  ({edge} edge?)" if edge else ""
+            lines.append(
+                f"  {wiring:34s} {label:3s} at {np.median(latencies):5.1f} ms {amp_text} "
+                f"present {present}/{len(group)}{edge_text}"
+            )
+        lines.append("")
+
     lines.append("Caveats carried from the recording settings")
     lines.append("-" * 70)
     lines.append("  The DSP high-pass sat at 0.777 Hz and the analog corner at 0.09 Hz, so a")
@@ -166,4 +205,4 @@ def verdict_text(result: SessionResult) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["conditions_csv", "runs_csv", "verdict_text"]
+__all__ = ["conditions_csv", "peaks_csv", "runs_csv", "verdict_text"]

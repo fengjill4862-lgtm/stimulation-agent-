@@ -243,7 +243,19 @@ def _annotate_panel(ax, result: SessionResult, run, evoked, channel_peaks) -> No
         if channel_peaks is not None and channel_peaks.smoothed_mean_uV.size
         else evoked.mean_waveform_uV
     )
-    ax.plot(evoked.waveform_time_ms, trace, linewidth=1.0, color=_COLORS[0])
+    if evoked.epochs_uV.size:
+        # Every raw single-pulse epoch, faint, under the mean. One plot call
+        # draws all of them; the y-limits are set from the mean below, so a
+        # single noisy trial cannot squash the panel.
+        ax.plot(
+            evoked.waveform_time_ms,
+            evoked.epochs_uV.T,
+            color="0.6",
+            linewidth=0.3,
+            alpha=0.25,
+            zorder=1,
+        )
+    ax.plot(evoked.waveform_time_ms, trace, linewidth=1.2, color=_COLORS[0], zorder=3)
     ax.axvline(0.0, color="k", linewidth=0.6)
     ax.axvspan(0.0, config.pulse_width_ms, color="k", alpha=0.08)
     ax.axvspan(
@@ -254,6 +266,16 @@ def _annotate_panel(ax, result: SessionResult, run, evoked, channel_peaks) -> No
     )
     if run.train is not None and np.isfinite(run.train.width_ms):
         ax.axvline(run.train.width_ms, color="r", linestyle="--", linewidth=0.7, alpha=0.6)
+        ax.annotate(
+            f"off-edge {run.train.width_ms:.1f} ms",
+            (run.train.width_ms, 0.02),
+            xycoords=("data", "axes fraction"),
+            fontsize=6,
+            color="r",
+            rotation=90,
+            va="bottom",
+            ha="right",
+        )
 
     if channel_peaks is not None:
         if np.isfinite(channel_peaks.threshold_uV):
@@ -288,6 +310,10 @@ def _annotate_panel(ax, result: SessionResult, run, evoked, channel_peaks) -> No
     ax.set_xlabel("time from pulse onset (ms)")
     ax.set_ylabel("uV")
     ax.grid(True, alpha=0.3)
+    if trace.size:
+        low, high = float(trace.min()), float(trace.max())
+        pad = 0.2 * (high - low) if high > low else 1.0
+        ax.set_ylim(low - pad, high + pad)
 
 
 def peak_annotated_waveform_figure(result: SessionResult) -> bytes:
@@ -339,8 +365,9 @@ def peak_annotated_waveform_figure(result: SessionResult) -> bytes:
         ax.set_title(title, fontsize=9)
 
     fig.suptitle(
-        "Detected peaks on the smoothed mean waveform. Dark band = nominal pulse,\n"
-        "light band = guard, red dashes = measured off-edge; open markers may be the off-edge.",
+        "Detected peaks on the smoothed mean waveform; grey = the individual pulses.\n"
+        "Dark band = nominal pulse, light band = guard, red dashes = measured off-edge; "
+        "open markers may be the off-edge.",
         fontsize=9,
     )
     fig.tight_layout()

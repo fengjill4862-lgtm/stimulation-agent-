@@ -37,6 +37,7 @@ _RELOAD_CHAIN = (
     # Depend on the leaves above, and on each other in this order.
     "plot_rhs_raw_wideband_with_stim_legend",
     "rhs_reader",
+    "rhd_reader",
     "plot_rhs_filtered_wideband",
     "plot_rhs_stim_triggered_events",
     "plot_rhs_power_analysis",
@@ -55,6 +56,18 @@ _RELOAD_CHAIN = (
     "stim_analysis.figures",
     "stim_analysis.secondary",
     "stim_analysis.pipeline",
+    # evoked_sweep package (Function 7), leaves first: config -> data -> stages.
+    # figures imports pipeline, and summary imports pipeline, so pipeline is
+    # reloaded before either of them.
+    "evoked_sweep.config",
+    "evoked_sweep.naming",
+    "evoked_sweep.load",
+    "evoked_sweep.pulses",
+    "evoked_sweep.metrics",
+    "evoked_sweep.artifact",
+    "evoked_sweep.pipeline",
+    "evoked_sweep.figures",
+    "evoked_sweep.summary",
 )
 
 _LAUNCHERS = {
@@ -65,6 +78,7 @@ _LAUNCHERS = {
     "show_function4_recorded_response_only": "wideband_function4_ui",
     "show_function5_power_analysis": "wideband_function5_power_ui",
     "show_function6_session_analysis": "wideband_function6_session_ui",
+    "show_function7_evoked_response": "wideband_function7_evoked_ui",
 }
 
 
@@ -120,6 +134,11 @@ def show_function6_session_analysis(namespace: MutableMapping[str, object] | Non
     _launch("show_function6_session_analysis", namespace)
 
 
+def show_function7_evoked_response(namespace: MutableMapping[str, object] | None = None) -> None:
+    """Launch Function 7: Evoked-response sweep (RHD, external stimulator)."""
+    _launch("show_function7_evoked_response", namespace)
+
+
 __all__ = [
     "show_function0_rename_rhs_folders",
     "show_function1_raw_wideband",
@@ -128,6 +147,7 @@ __all__ = [
     "show_function4_recorded_response_only",
     "show_function5_power_analysis",
     "show_function6_session_analysis",
+    "show_function7_evoked_response",
 ]
 
 

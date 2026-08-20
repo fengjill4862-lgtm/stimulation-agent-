@@ -88,8 +88,14 @@ def build_rhd_bytes(
     n_blocks: int = 3,
     first_timestamp: int = 0,
     impedances: dict[str, tuple[float, float]] | None = None,
+    amp_codes: np.ndarray | None = None,
 ) -> tuple[bytes, dict[str, np.ndarray]]:
-    """Build one synthetic RHD file and the raw code arrays that went into it."""
+    """Build one synthetic RHD file and the raw code arrays that went into it.
+
+    ``amp_codes`` supplies the amplifier payload instead of random data, so
+    other self-tests can write a signal with known content -- a stimulus train,
+    a rhythm -- and check that an analysis recovers it.
+    """
     major, minor = version
     spb = 60 if major == 1 else 128
     impedances = impedances or {}
@@ -156,7 +162,14 @@ def build_rhd_bytes(
     n_adc = len(adc_channels)
     n_samples = spb * n_blocks
 
-    amp_codes = rng.integers(0, 65536, size=(n_amp, n_samples), dtype=np.uint16)
+    if amp_codes is None:
+        amp_codes = rng.integers(0, 65536, size=(n_amp, n_samples), dtype=np.uint16)
+    else:
+        amp_codes = np.asarray(amp_codes, dtype=np.uint16)
+        if amp_codes.shape != (n_amp, n_samples):
+            raise ValueError(
+                f"amp_codes must be {(n_amp, n_samples)}, got {amp_codes.shape}"
+            )
     aux_codes = rng.integers(0, 65536, size=(n_aux, n_samples // 4), dtype=np.uint16)
     supply_codes = rng.integers(0, 65536, size=(n_supply, n_blocks), dtype=np.uint16)
     temp_codes = rng.integers(

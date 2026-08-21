@@ -191,6 +191,12 @@ def _snap_onsets(
     Snapping is bounded to a quarter period, so a pulse the detector missed
     cannot pull its neighbour off station, and jitter from the software-timed
     serial link is absorbed without the comb drifting.
+
+    For wide pulses (>= 50 ms, the slow biphasic protocol) the envelope is a
+    plateau and its argmax can sit hundreds of ms into the pulse, so the tooth
+    snaps to the leading edge instead: the first bin in the search window to
+    cross half the window's maximum. Narrow pulses keep the classic peak snap
+    unchanged.
     """
     period_bins = period_s / bin_s
     if not np.isfinite(period_bins) or period_bins < 1:
@@ -198,6 +204,7 @@ def _snap_onsets(
 
     tolerance = max(1, int(round(period_bins / 4.0)))
     first_bin = first_onset_s / bin_s
+    wide_pulse = config.pulse_width_ms >= 50.0
 
     onsets: list[float] = []
     for index in range(config.expected_pulses):
@@ -206,7 +213,12 @@ def _snap_onsets(
         hi = min(z.size - 1, centre + tolerance)
         if lo > hi or lo >= z.size:
             break
-        peak = lo + int(np.argmax(z[lo : hi + 1]))
+        window = z[lo : hi + 1]
+        if wide_pulse:
+            above = np.flatnonzero(window >= float(window.max()) / 2.0)
+            peak = lo + int(above[0]) if above.size else lo + int(np.argmax(window))
+        else:
+            peak = lo + int(np.argmax(window))
         onsets.append(peak * bin_s)
 
     return np.asarray(onsets, dtype=np.float64)

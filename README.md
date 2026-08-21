@@ -35,6 +35,14 @@ spike-sorting workflow.)
 Functions 1 and 4 were folded into Function 2 on 2026-08-20: Raw mode is the
 old Function 1, Filtered + "Ignore stim" is the old Function 4.
 
+File formats: Functions 2, 3 and 5 read both `.rhs` and `.rhd` folders
+(decided per folder in `rhs_stim.folder_recording_format`). RHD recordings
+carry no stim channel, so Functions 3 and 5 recover the Keithley pulse train
+from the amplifier trace (`rhd_timing.py`, Function 7's comb fit) and run on a
+synthetic unit-amplitude stim proxy -- timing is real, amplitude is not.
+Function 6 stays RHS-only: its validation reads the RHS stim marker. Function
+0 renames RHS folders only. The batch runner is RHS-only for now.
+
 Shared: `wideband_ui_common.py` (widgets, previews, atomic saves),
 `rhs_stim.py` (channel reading, stim-channel resolution), `rhs_reader.py`
 (multi-channel RHS readers), `rhs_naming.py`, `rhs_files.py`.

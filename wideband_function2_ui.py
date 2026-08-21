@@ -51,7 +51,7 @@ from plot_rhs_raw_wideband_with_stim_legend import (
     sample_slice_for_time_window,
     time_window_label,
 )
-from rhs_stim import read_selected_channels, resolve_stim_channel
+from rhs_stim import folder_recording_format, read_selected_channels, resolve_stim_channel
 from plot_rhs_filtered_wideband import (
     default_filtered_output_path,
     default_response_output_path,
@@ -175,10 +175,17 @@ def show_function2_continuous_traces(namespace: MutableMapping[str, object] | No
         if time_window is not None:
             output_label = f"{output_label}_{time_window_label(time_window)}"
 
+        recording_format = folder_recording_format(data_folder) or "rhs"
+        format_label = recording_format.upper()
+        no_stim_text = (
+            "no stim channel (.rhd recordings carry none; Function 7 recovers Keithley timing)"
+            if recording_format == "rhd"
+            else "no nonzero stim_data found in any recorded channel"
+        )
         status.value = (
-            f"Reading RHS files from <b>{data_folder}</b>..."
+            f"Reading {format_label} files from <b>{data_folder}</b>..."
             if raw_mode
-            else f"Reading RHS files and {format_bandpass_status(band_hz)}..."
+            else f"Reading {format_label} files and {format_bandpass_status(band_hz)}..."
         )
         try:
             read = read_selected_channels(data_folder, channels)
@@ -259,7 +266,7 @@ def show_function2_continuous_traces(namespace: MutableMapping[str, object] | No
                 "all time" if time_window is None else f"{display_bounds[0]:g}-{display_bounds[1]:g} s"
             )
             if stim_channel_info is None:
-                stim_status = "no nonzero stim_data found in any recorded channel"
+                stim_status = no_stim_text
             else:
                 shown = " *" if stim_channel_name in channels else " (not displayed)"
                 stim_status = (
@@ -267,7 +274,7 @@ def show_function2_continuous_traces(namespace: MutableMapping[str, object] | No
                 )
             total_timestamp_gaps = sum(item.timestamp_gaps for item in loaded)
             status.value = (
-                f"Loaded {len(loaded)} RHS file(s) for {len(channels)} channel(s), "
+                f"Loaded {len(loaded)} {format_label} file(s) for {len(channels)} channel(s), "
                 f"displaying {displayed_samples} of {first_raw_uV.size} samples/channel "
                 f"({time_status}), {stim_status}, {total_timestamp_gaps} timestamp gaps."
             )
@@ -277,7 +284,7 @@ def show_function2_continuous_traces(namespace: MutableMapping[str, object] | No
             duration_s = total_samples / sample_rate_hz if sample_rate_hz else 0.0
             status.value = (
                 f"Generated response-only preview for {len(channels)} channel(s) "
-                f"from {len(loaded)} RHS file(s), duration {duration_s:g} s; "
+                f"from {len(loaded)} {format_label} file(s), duration {duration_s:g} s; "
                 f"{format_bandpass_status(band_hz)}."
             )
             show_preview_image(
@@ -296,7 +303,7 @@ def show_function2_continuous_traces(namespace: MutableMapping[str, object] | No
                 "all time" if time_window is None else f"{time_window[0]:g}-{time_window[1]:g} s"
             )
             if stim_channel_name is None:
-                stim_status = "no nonzero stim_data found in any recorded channel"
+                stim_status = no_stim_text
             else:
                 shown = " *" if stim_channel_name in channels else " (not displayed)"
                 stim_status = f"stim channel: {stim_channel_name}{shown}"
@@ -305,7 +312,7 @@ def show_function2_continuous_traces(namespace: MutableMapping[str, object] | No
                 f" <b style='color:#b26a00'>Warning:</b> {warning}" if warning else ""
             )
             status.value = (
-                f"Loaded {len(loaded)} RHS file(s) for {len(channels)} channel(s). "
+                f"Loaded {len(loaded)} {format_label} file(s) for {len(channels)} channel(s). "
                 f"Time window: {time_status}. "
                 f"{stim_status}. "
                 f"Signal RMS: {rms_text}. "

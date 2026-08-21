@@ -69,6 +69,9 @@ _RELOAD_CHAIN = (
     "evoked_sweep.pipeline",
     "evoked_sweep.figures",
     "evoked_sweep.summary",
+    # Stim-timing recovery for RHD viewers (Functions 3 and 5); imports from
+    # evoked_sweep, so it reloads after the whole package.
+    "rhd_timing",
 )
 
 _LAUNCHERS = {

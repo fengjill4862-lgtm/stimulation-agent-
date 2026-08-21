@@ -367,10 +367,17 @@ def read_rhs_folder(folder: Path, channel_name: str) -> tuple[np.ndarray, np.nda
 
 
 def read_rhs_amplifier_channel_names(folder: Path) -> list[str]:
-    """Return amplifier channel names from the first .rhs file in a folder."""
+    """Return amplifier channel names from the first .rhs or .rhd file in a folder."""
     rhs_files = sorted(folder.expanduser().glob("*.rhs"))
     if not rhs_files:
-        raise FileNotFoundError(f"No .rhs files found in {folder}")
+        rhd_files = sorted(folder.expanduser().glob("*.rhd"))
+        if rhd_files:
+            # Imported lazily: this module sits above rhd_reader in the reload
+            # chain, so a top-level import would go stale on reload.
+            from rhd_reader import read_rhd_header
+
+            return list(read_rhd_header(rhd_files[0]).amplifier_channels)
+        raise FileNotFoundError(f"No .rhs or .rhd files found in {folder}")
 
     first_file = rhs_files[0]
     with first_file.open("rb") as fid:

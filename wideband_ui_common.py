@@ -85,11 +85,11 @@ def folder_path_from_text(value: str) -> Path:
 
 
 def rhs_folder_error(folder: Path) -> str | None:
-    """Return error markup if `folder` is not a usable RHS session, else None."""
+    """Return error markup if `folder` holds no .rhs or .rhd files, else None."""
     if not folder.exists():
         return error_html_with_detail("Folder not found:", folder)
-    if not list(folder.glob("*.rhs")):
-        return error_html_with_detail("No .rhs files found in:", folder)
+    if not list(folder.glob("*.rhs")) and not list(folder.glob("*.rhd")):
+        return error_html_with_detail("No .rhs or .rhd files found in:", folder)
     return None
 
 

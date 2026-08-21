@@ -27,8 +27,9 @@ from plot_rhs_power_analysis import (
     power_rows_to_csv,
 )
 from plot_rhs_raw_wideband_with_stim_legend import resolve_channel_selection
-from rhs_stim import read_selected_channels, resolve_stim_channel
+from rhs_stim import folder_recording_format, read_selected_channels, resolve_stim_channel
 from rhs_files import atomic_write_all
+from rhd_timing import RECOVERY_FAILED, recover_stim_proxy
 
 
 def show_function5_power_analysis(
@@ -85,6 +86,20 @@ def show_function5_power_analysis(
         layout=widgets.Layout(width="220px"),
         style={"description_width": "110px"},
     )
+    # Used only for .rhd folders, whose stim timing must be recovered from the
+    # amplifier trace (no stim channel exists in the format).
+    rhd_pulses_int = widgets.IntText(
+        value=50,
+        description="RHD pulses",
+        layout=widgets.Layout(width="180px"),
+        style={"description_width": "95px"},
+    )
+    rhd_width_float = widgets.FloatText(
+        value=5.0,
+        description="RHD width (ms)",
+        layout=widgets.Layout(width="210px"),
+        style={"description_width": "125px"},
+    )
 
     power_generate_button = widgets.Button(
         description="Generate Power Preview",
@@ -126,6 +141,7 @@ def show_function5_power_analysis(
                     )
                 ),
                 widgets.HBox([prepost_window_float, prepost_step_float, prepost_guard_float]),
+                widgets.HBox([rhd_pulses_int, rhd_width_float]),
                 widgets.HBox([power_generate_button, power_save_button, power_target_label]),
                 power_status,
                 power_preview_output,
@@ -148,9 +164,10 @@ def show_function5_power_analysis(
                 f"<b style='color:#b00020'>Folder not found:</b> {data_folder}"
             )
             return
-        if not list(data_folder.glob("*.rhs")):
+        recording_format = folder_recording_format(data_folder)
+        if recording_format is None:
             power_status.value = (
-                f"<b style='color:#b00020'>No .rhs files found in:</b> {data_folder}"
+                f"<b style='color:#b00020'>No .rhs or .rhd files found in:</b> {data_folder}"
             )
             return
 
@@ -164,7 +181,7 @@ def show_function5_power_analysis(
             power_status.value = f"<b style='color:#b00020'>{exc}</b>"
             return
 
-        power_status.value = f"Reading RHS files from <b>{data_folder}</b>..."
+        power_status.value = f"Reading {recording_format.upper()} files from <b>{data_folder}</b>..."
         try:
             raw_channel_data, stim_channel_info, sample_rate_hz, loaded = _read_power_inputs(
                 data_folder, channels
@@ -173,6 +190,21 @@ def show_function5_power_analysis(
             power_status.value = f"<b style='color:#b00020'>{exc}</b>"
             return
 
+        recovery_note = ""
+        if stim_channel_info is None and recording_format == "rhd":
+            power_status.value = "Recovering the pulse train from the amplifier trace..."
+            recovered = recover_stim_proxy(
+                data_folder,
+                raw_channel_data,
+                sample_rate_hz,
+                expected_pulses=int(rhd_pulses_int.value),
+                pulse_width_ms=float(rhd_width_float.value),
+            )
+            if recovered is None:
+                power_status.value = f"<b style='color:#b00020'>{RECOVERY_FAILED}</b>"
+                return
+            stim_channel_info = (recovered.label, recovered.stim_uA, ())
+            recovery_note = f"; {recovered.note}"
         if stim_channel_info is None:
             power_status.value = (
                 "<b style='color:#b00020'>No nonzero stim_data found in any recorded channel in this folder.</b>"
@@ -236,8 +268,9 @@ def show_function5_power_analysis(
             )
 
         power_status.value = (
-            f"Generated {mode_label} power preview from {len(loaded)} RHS file(s), "
-            f"{len(channels)} channel(s), {len(bands)} band(s)."
+            f"Generated {mode_label} power preview from {len(loaded)} "
+            f"{recording_format.upper()} file(s), "
+            f"{len(channels)} channel(s), {len(bands)} band(s){recovery_note}."
         )
 
     def save_power_outputs(_button=None) -> None:

@@ -277,8 +277,10 @@ avoids collisions by adding `__2`, `__3`, and so on.
 
 Absorbed the old Functions 1 and 4 on 2026-08-20. Launcher:
 `show_function2_continuous_traces`. All loading goes through
-`rhs_stim.read_selected_channels` -- the single insertion point for a future
-`.rhd` reader.
+`rhs_stim.read_selected_channels`, which reads `.rhs` per channel or an entire
+`.rhd` run in one pass (`rhs_stim.folder_recording_format` decides). On RHD the
+stim triple carries a shared all-zeros `stim_uA` and the status line says the
+format has no stim channel rather than implying an empty one.
 
 Controls:
 
@@ -364,6 +366,13 @@ Behavior:
   padding is trimmed. The continuous trace is never filtered. `Bandpass=all`
   remains a bit-identical pass-through. Every Function 3 PNG with a numeric
   band differs from pre-2026-08-20 output by design.
+- **RHD folders**: no stim channel exists, so when `resolve_stim_channel`
+  returns None on an `.rhd` folder the UI recovers the Keithley train from the
+  amplifier trace (`rhd_timing.recover_stim_proxy`, Function 7's comb fit)
+  using the `RHD pulses` / `RHD width (ms)` fields, and drives the event grid
+  from a synthetic unit-amplitude stim proxy labelled `recovered`. The stim
+  row then shows unit rectangles: timing is real, amplitude is not. The status
+  line reports pulses, period, width and comb-z confidence.
 
 ## Function 5: Power Analysis
 
@@ -378,7 +387,9 @@ activity.
 The UI runs pre/post mode only (the event-locked mode was retired from the UI
 on 2026-08-20; its numerics remain in `plot_rhs_power_analysis.py` for
 `batch_run_wideband_main_ui.py --power-mode event` and as import donors to
-`stim_analysis/`). Controls:
+`stim_analysis/`). On `.rhd` folders the first/last-stim split is driven by
+the trace-recovered proxy (`rhd_timing`, same `RHD pulses` / `RHD width (ms)`
+fields as Function 3). Controls:
 
 ```text
 Channels: all

@@ -200,6 +200,22 @@ def show_function6_session_analysis(namespace: MutableMapping[str, object] | Non
         if not parent.exists() or not parent.is_dir():
             status.value = error_html(f"Session folder not found: {parent}")
             return None
+        # RHS-only by design: the whole validation stage (commanded vs detected
+        # pulses, compliance, amplitude ladder) reads the RHS stim marker, which
+        # .rhd files do not have.
+        has_rhs = bool(
+            list(parent.glob("*.rhs")) or any(child.glob("*.rhs") for child in parent.iterdir() if child.is_dir())
+        )
+        has_rhd = bool(
+            list(parent.glob("*.rhd")) or any(child.glob("*.rhd") for child in parent.iterdir() if child.is_dir())
+        )
+        if not has_rhs and has_rhd:
+            status.value = error_html(
+                "This is an RHD session. RHD recordings carry no stim marker to "
+                "validate against, so Function 6 is RHS-only -- use Function 7 "
+                "for Keithley-stimulated RHD sweeps."
+            )
+            return None
         try:
             cfg = build_config()
         except ValueError as exc:

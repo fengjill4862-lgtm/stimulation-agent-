@@ -25,7 +25,13 @@ from plot_rhs_raw_wideband_with_stim_legend import (
     channel_selection_label,
     resolve_channel_selection,
 )
-from rhs_stim import NO_STIM_IN_FOLDER, read_selected_channels, resolve_stim_channel
+from rhs_stim import (
+    NO_STIM_IN_FOLDER,
+    folder_recording_format,
+    read_selected_channels,
+    resolve_stim_channel,
+)
+from rhd_timing import RECOVERY_FAILED, recover_stim_proxy
 from plot_rhs_filtered_wideband import (
     format_bandpass_status,
     parse_amplitude_range,
@@ -102,6 +108,20 @@ def show_function3_stim_triggered_events(
         layout=widgets.Layout(width="210px"),
         style={"description_width": "90px"},
     )
+    # Used only for .rhd folders, whose stim timing must be recovered from the
+    # amplifier trace (no stim channel exists in the format).
+    rhd_pulses_int = widgets.IntText(
+        value=50,
+        description="RHD pulses",
+        layout=widgets.Layout(width="180px"),
+        style={"description_width": "95px"},
+    )
+    rhd_width_float = widgets.FloatText(
+        value=5.0,
+        description="RHD width (ms)",
+        layout=widgets.Layout(width="210px"),
+        style={"description_width": "125px"},
+    )
     event_show_stim_checkbox = widgets.Checkbox(
         value=True,
         description="Show stim current",
@@ -142,6 +162,7 @@ def show_function3_stim_triggered_events(
                 widgets.HBox(
                     [event_pre_time_float, event_post_time_text, event_train_gap_float]
                 ),
+                widgets.HBox([rhd_pulses_int, rhd_width_float]),
                 widgets.HBox(
                     [
                         event_max_points_int,
@@ -198,13 +219,14 @@ def show_function3_stim_triggered_events(
                 f"<b style='color:#b00020'>Folder not found:</b> {data_folder}"
             )
             return
-        if not list(data_folder.glob("*.rhs")):
+        recording_format = folder_recording_format(data_folder)
+        if recording_format is None:
             event_status.value = (
-                f"<b style='color:#b00020'>No .rhs files found in:</b> {data_folder}"
+                f"<b style='color:#b00020'>No .rhs or .rhd files found in:</b> {data_folder}"
             )
             return
 
-        event_status.value = f"Reading RHS files from <b>{data_folder}</b>..."
+        event_status.value = f"Reading {recording_format.upper()} files from <b>{data_folder}</b>..."
         try:
             read = read_selected_channels(data_folder, channels)
             # Searches selected channels first, then every other recorded
@@ -219,6 +241,21 @@ def show_function3_stim_triggered_events(
         sample_rate_hz = read.sample_rate_hz
         loaded = read.loaded
 
+        recovery_note = ""
+        if stim_channel_info is None and recording_format == "rhd":
+            event_status.value = "Recovering the pulse train from the amplifier trace..."
+            recovered = recover_stim_proxy(
+                data_folder,
+                raw_channel_data,
+                sample_rate_hz,
+                expected_pulses=int(rhd_pulses_int.value),
+                pulse_width_ms=float(rhd_width_float.value),
+            )
+            if recovered is None:
+                event_status.value = f"<b style='color:#b00020'>{RECOVERY_FAILED}</b>"
+                return
+            stim_channel_info = (recovered.label, recovered.stim_uA, ())
+            recovery_note = f"; {recovered.note}"
         if stim_channel_info is None:
             event_status.value = f"<b style='color:#b00020'>{NO_STIM_IN_FOLDER}</b>"
             return
@@ -338,10 +375,12 @@ def show_function3_stim_triggered_events(
         )
         event_status.value = (
             f"Generated one combined PNG preview with {len(events)} event(s) "
-            f"from {len(loaded)} RHS file(s), using {stim_detection_channel} stim_data "
+            f"from {len(loaded)} {recording_format.upper()} file(s), "
+            f"using {stim_detection_channel} stim_data "
             f"for grouped onsets ({first_onset:g} to {last_onset:g} s; "
             f"train gap {train_gap_ms:g} ms; window {window_label}{blank_note}; "
-            f"stim current {'shown' if show_stim_current else 'hidden'}{pipeline_note})."
+            f"stim current {'shown' if show_stim_current else 'hidden'}{pipeline_note}"
+            f"{recovery_note})."
         )
 
     def save_event_pngs(_button=None) -> None:

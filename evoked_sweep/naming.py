@@ -247,9 +247,44 @@ def discover_runs(session_folder: Path) -> list[RunCondition]:
     return runs
 
 
+def contact_index(channel: str) -> int:
+    """Trailing integer of a channel name: B-017 -> 17. -1 when absent."""
+    match = re.search(r"(\d+)$", channel)
+    return int(match.group(1)) if match else -1
+
+
+def contact_positions_um(
+    channels,
+    pitch_um: float,
+    order: tuple[str, ...] | None = None,
+) -> dict[str, float]:
+    """{channel: position in um}, zeroed at the lowest-index channel present.
+
+    Relative positions only: the pitch between contacts is known (500 um on
+    this array) but the offset from the stim site to the first contact was
+    never measured, so no absolute distance exists to report.
+    """
+    indices: dict[str, float] = {}
+    for channel in channels:
+        if order is not None:
+            indices[channel] = float(order.index(channel)) if channel in order else float("nan")
+        else:
+            index = contact_index(channel)
+            indices[channel] = float(index) if index >= 0 else float("nan")
+
+    valid = [value for value in indices.values() if value == value]  # NaN-safe
+    origin = min(valid) if valid else 0.0
+    return {
+        channel: (value - origin) * pitch_um if value == value else float("nan")
+        for channel, value in indices.items()
+    }
+
+
 __all__ = [
     "RunCondition",
     "Wiring",
+    "contact_index",
+    "contact_positions_um",
     "discover_runs",
     "parse_amplitude",
     "parse_run",

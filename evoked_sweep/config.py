@@ -41,6 +41,12 @@ class EvokedConfig:
     channels: tuple[str, ...] | None = None
     healthy_impedance_max_ohms: float = 1.0e6
 
+    # Contact geometry. Positions are RELATIVE to the lowest-index healthy
+    # contact (B-017 -> 0 um this session); the absolute offset to the stim
+    # site was never measured and is always reported as unknown.
+    contact_pitch_um: float = 500.0
+    contact_order: tuple[str, ...] | None = None  # None: by trailing index
+
     # Protocol (known, used as priors and as correctness checks).
     expected_pulses: int = 50
     pulse_width_ms: float = 5.0
@@ -111,6 +117,10 @@ def config_from_text_fields(
     max_peaks: str = "",
     peak_search_half_ms: str = "",
     edge_flag_ms: str = "",
+    contact_pitch_um: str = "",
+    contact_order: str = "",
+    response_window_ms: str = "",
+    max_period_s: str = "",
 ) -> EvokedConfig:
     """Build an EvokedConfig from raw widget or CLI strings.
 
@@ -177,6 +187,13 @@ def config_from_text_fields(
     if max_runs_value == 0:
         max_runs_value = None
 
+    order_text = _clean(contact_order)
+    order_value: tuple[str, ...] | None = None
+    if order_text:
+        order_value = tuple(
+            part.strip() for part in order_text.replace(",", " ").upper().split() if part.strip()
+        ) or None
+
     return EvokedConfig(
         session_folder=folder,
         single_run=_clean(single_run).lower() in ("1", "true", "yes", "on", "single"),
@@ -190,6 +207,10 @@ def config_from_text_fields(
         max_peaks=_positive_int(max_peaks, "Max peaks", 5),
         peak_search_half_ms=_positive_float(peak_search_half_ms, "Peak search +/- (ms)", 3.0),
         edge_flag_ms=_non_negative_float(edge_flag_ms, "Edge flag (ms)", 1.5),
+        contact_pitch_um=_positive_float(contact_pitch_um, "Contact pitch (um)", 500.0),
+        contact_order=order_value,
+        response_window_ms=_positive_float(response_window_ms, "Response window (ms)", 50.0),
+        max_period_s=_positive_float(max_period_s, "Max period (s)", 1.5),
     )
 
 

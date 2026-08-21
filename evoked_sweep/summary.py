@@ -152,6 +152,20 @@ def verdict_text(result: SessionResult) -> str:
         )
     lines.append("")
 
+    decade_suspects = sorted(
+        {
+            (str(row["run"]), row["decade_suspect_note"])
+            for row in result.rows
+            if row.get("decade_suspect")
+        }
+    )
+    if decade_suspects:
+        lines.append("Possible decade mislabels (flagged from the dose-response, never corrected)")
+        lines.append("-" * 70)
+        for run_name, note in decade_suspects:
+            lines.append(f"  {run_name}: {note}")
+        lines.append("")
+
     suspicion = defaultdict(list)
     for row in result.rows:
         if row.get("artifact_suspicion") is not None:
@@ -194,7 +208,27 @@ def verdict_text(result: SessionResult) -> str:
     lines.append("  true DC or vascular drift was removed before it reached the file. The")
     lines.append("  post-train measure only sees changes faster than about 0.1 Hz.")
     lines.append("  Band power is reported twice: comb-excluded (valid for every band) and")
-    lines.append("  gap-based (blank for delta and theta, whose periods do not fit the gap).")
+    minimums = [
+        row["band_gap_minimum_hz"]
+        for row in result.rows
+        if np.isfinite(row.get("band_gap_minimum_hz", float("nan")))
+    ]
+    if minimums:
+        cutoff = max(minimums)
+        blank = [
+            name
+            for name, low, _high in config.bands
+            if not any(
+                np.isfinite(row.get(f"band_{name}_dB_gap", float("nan"))) for row in result.rows
+            )
+        ]
+        blank_text = ", ".join(blank) if blank else "no band"
+        lines.append(
+            f"  gap-based (needs >=3 cycles per gap: invalid below {cutoff:.1f} Hz at this"
+        )
+        lines.append(f"  session's intervals, leaving {blank_text} blank).")
+    else:
+        lines.append("  gap-based (blank for any band below three cycles per gap).")
     lines.append("  Amplitudes are parsed literally from folder names; suspected magnitude")
     lines.append("  mislabels are flagged, never corrected.")
     lines.append("")

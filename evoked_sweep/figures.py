@@ -39,7 +39,7 @@ def _to_png(fig) -> bytes:
 
 
 def _by_wiring_channel(rows: list[dict], value_key: str):
-    grouped: dict[tuple[str, str], list[tuple[float, float]]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[tuple[float, float, dict]]] = defaultdict(list)
     for row in rows:
         amplitude = row.get("amplitude_mA")
         value = row.get(value_key)
@@ -47,8 +47,17 @@ def _by_wiring_channel(rows: list[dict], value_key: str):
             continue
         if not np.isfinite(value):
             continue
-        grouped[(row["wiring"], row["channel"])].append((float(amplitude), float(value)))
+        grouped[(row["wiring"], row["channel"])].append((float(amplitude), float(value), row))
     return grouped
+
+
+def _position_label(um) -> str:
+    """'+500 um' for a finite relative contact position, '' otherwise."""
+    try:
+        value = float(um)
+    except (TypeError, ValueError):
+        return ""
+    return f"{value:+.0f} um" if np.isfinite(value) else ""
 
 
 def dose_response_figure(result: SessionResult) -> bytes:
@@ -71,21 +80,50 @@ def dose_response_figure(result: SessionResult) -> bytes:
         ax = axes[index // columns][index % columns]
         channels = sorted({key[1] for key in grouped if key[0] == wiring})
         for channel_index, channel in enumerate(channels):
-            points = sorted(grouped[(wiring, channel)])
+            points = sorted(grouped[(wiring, channel)], key=lambda p: p[0])
             amplitudes = np.array([p[0] for p in points])
             values = np.array([p[1] for p in points])
+            suspect = np.array([bool(p[2].get("decade_suspect")) for p in points])
+            position = _position_label(points[0][2].get("contact_position_um"))
+            channel_label = f"{channel} ({position})" if position else channel
             color = _COLORS[channel_index % len(_COLORS)]
             for polarity, marker in ((1, "o"), (-1, "s")):
                 mask = np.sign(amplitudes) == polarity
-                if mask.any():
+                if not mask.any():
+                    continue
+                label = f"{channel_label} {'anodic' if polarity > 0 else 'cathodic'}"
+                clean = mask & ~suspect
+                if clean.any():
                     ax.plot(
-                        np.abs(amplitudes[mask]),
-                        values[mask],
+                        np.abs(amplitudes[clean]),
+                        values[clean],
                         marker,
                         color=color,
-                        label=f"{channel} {'anodic' if polarity > 0 else 'cathodic'}",
+                        label=label,
                         markersize=5,
                     )
+                flagged = mask & suspect
+                if flagged.any():
+                    ax.plot(
+                        np.abs(amplitudes[flagged]),
+                        values[flagged],
+                        marker,
+                        color=color,
+                        markerfacecolor="none",
+                        label=None if clean.any() else label,
+                        markersize=5,
+                    )
+                    for x_value, y_value in zip(
+                        np.abs(amplitudes[flagged]), values[flagged]
+                    ):
+                        ax.annotate(
+                            "10x?",
+                            (x_value, y_value),
+                            textcoords="offset points",
+                            xytext=(4, 4),
+                            fontsize=6,
+                            color=color,
+                        )
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel("|current| (mA)")
@@ -99,7 +137,9 @@ def dose_response_figure(result: SessionResult) -> bytes:
 
     fig.suptitle(
         "Evoked deflection vs current. Circles anodic, squares cathodic. "
-        "A straight line through the origin on linear axes is what coupling looks like.",
+        "A straight line through the origin on linear axes is what coupling looks like.\n"
+        "Contact positions are relative to the lowest healthy contact (stim-site offset "
+        "unknown). Open faces marked 10x? fit a current one decade off their label.",
         fontsize=9,
     )
     fig.tight_layout()
@@ -154,44 +194,83 @@ def waveform_figure(result: SessionResult) -> bytes:
 
 
 def band_power_figure(result: SessionResult) -> bytes:
-    """Band power change against current, comb-excluded estimate."""
-    band_names = [name for name, _low, _high in result.config.bands]
-    fig, axes = plt.subplots(1, len(band_names), figsize=(3.0 * len(band_names), 3.4), squeeze=False)
+    """Band power change against current: comb-excluded paired with gap-based."""
+    bands = list(result.config.bands)
+    fig, axes = plt.subplots(1, len(bands), figsize=(3.0 * len(bands), 3.4), squeeze=False)
 
-    for index, name in enumerate(band_names):
+    # One stable color per wiring across every panel.
+    wirings = sorted(
+        {row["wiring"] for row in result.rows if row.get("amplitude_mA") is not None}
+    )
+    wiring_color = {w: _COLORS[i % len(_COLORS)] for i, w in enumerate(wirings)}
+
+    for index, (name, low, high) in enumerate(bands):
         ax = axes[0][index]
-        grouped = _by_wiring_channel(result.rows, f"band_{name}_dB")
-        wirings = sorted({key[0] for key in grouped})
-        for wiring_index, wiring in enumerate(wirings):
-            amplitudes: list[float] = []
-            values: list[float] = []
-            for (group_wiring, _channel), points in grouped.items():
-                if group_wiring != wiring:
-                    continue
-                for amplitude, value in points:
-                    amplitudes.append(abs(amplitude))
-                    values.append(value)
-            if amplitudes:
+        gap_seen = False
+        rows_seen = False
+        minimum_hz = float("nan")
+        for row in result.rows:
+            amplitude = row.get("amplitude_mA")
+            comb = row.get(f"band_{name}_dB")
+            if amplitude is None or comb is None or not np.isfinite(comb):
+                continue
+            rows_seen = True
+            color = wiring_color.get(row["wiring"], _COLORS[0])
+            x = abs(float(amplitude))
+            gap = row.get(f"band_{name}_dB_gap")
+            row_minimum = row.get("band_gap_minimum_hz")
+            if row_minimum is not None and np.isfinite(row_minimum):
+                minimum_hz = max(minimum_hz, float(row_minimum)) if np.isfinite(minimum_hz) else float(row_minimum)
+            if gap is not None and np.isfinite(gap):
+                gap_seen = True
+                # Connector first, so the markers draw over it.
+                ax.plot([x, x * 1.07], [comb, gap], color="0.75", linewidth=0.5, zorder=1)
                 ax.plot(
-                    amplitudes,
-                    values,
-                    "o",
+                    x * 1.07,
+                    gap,
+                    "^",
                     markersize=3.5,
-                    color=_COLORS[wiring_index % len(_COLORS)],
-                    label=wiring if index == 0 else None,
+                    color=color,
+                    markerfacecolor="none",
+                    zorder=2,
                 )
+            ax.plot(x, comb, "o", markersize=3.5, color=color, zorder=3)
+        if rows_seen and not gap_seen and np.isfinite(minimum_hz) and low < minimum_hz:
+            ax.text(
+                0.5,
+                0.04,
+                f"gap needs >=3 cycles (< {minimum_hz:.1f} Hz invalid at this interval)",
+                transform=ax.transAxes,
+                ha="center",
+                fontsize=6,
+                color="0.4",
+            )
         ax.axhline(0.0, color="k", linewidth=0.6)
         ax.set_xscale("log")
         ax.set_xlabel("|current| (mA)")
         if index == 0:
             ax.set_ylabel("train vs baseline (dB)")
-        ax.set_title(name, fontsize=9)
+        ax.set_title(f"{name} ({low:g}-{high:g} Hz)", fontsize=9)
         ax.grid(True, alpha=0.3, which="both")
 
-    handles, labels = axes[0][0].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels, fontsize=6, loc="lower center", ncol=3)
-    fig.suptitle("Band power change, pulse-harmonic bins excluded before integrating", fontsize=9)
+    proxy_ax = axes[0][0]
+    handles = [
+        proxy_ax.plot([], [], "o", markersize=3.5, color=wiring_color[w], label=w)[0]
+        for w in wirings
+    ]
+    handles.append(
+        proxy_ax.plot([], [], "o", markersize=3.5, color="k", label="comb-excluded")[0]
+    )
+    handles.append(
+        proxy_ax.plot(
+            [], [], "^", markersize=3.5, color="k", markerfacecolor="none", label="gap-based"
+        )[0]
+    )
+    fig.legend(handles, [h.get_label() for h in handles], fontsize=6, loc="lower center", ncol=4)
+    fig.suptitle(
+        "Band power change: filled = comb-excluded, open = gap-based; grey ties join the same run.",
+        fontsize=9,
+    )
     fig.tight_layout(rect=(0, 0.08, 1, 1))
     return _to_png(fig)
 
@@ -325,6 +404,14 @@ def peak_annotated_waveform_figure(result: SessionResult) -> bytes:
         ax.axis("off")
         return _to_png(fig)
 
+    positions = {
+        row["channel"]: row.get("contact_position_um") for row in result.rows
+    }
+
+    def _channel_title(channel: str) -> str:
+        position = _position_label(positions.get(channel))
+        return f"{channel} ({position})" if position else channel
+
     panels: list[tuple] = []  # (title, run, evoked, channel_peaks)
     if len(runs) == 1:
         run = runs[0]
@@ -332,7 +419,7 @@ def peak_annotated_waveform_figure(result: SessionResult) -> bytes:
         for evoked in run.evoked:
             panels.append(
                 (
-                    f"{run.condition.wiring.label} -- {evoked.channel}",
+                    f"{run.condition.wiring.label} -- {_channel_title(evoked.channel)}",
                     run,
                     evoked,
                     peaks_by_channel.get(evoked.channel),
@@ -351,7 +438,8 @@ def peak_annotated_waveform_figure(result: SessionResult) -> bytes:
                 peaks_by_channel = {p.channel: p for p in run.peaks}
                 panels.append(
                     (
-                        f"{wiring} -- {run.condition.amplitude_label} ({evoked.channel})",
+                        f"{wiring} -- {run.condition.amplitude_label} "
+                        f"({_channel_title(evoked.channel)})",
                         run,
                         evoked,
                         peaks_by_channel.get(evoked.channel),

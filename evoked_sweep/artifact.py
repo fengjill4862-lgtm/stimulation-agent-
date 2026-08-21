@@ -158,11 +158,102 @@ def sweep_evidence(
     )
 
 
+# Decade-mislabel detection. The session mixed two folder-name conventions a
+# decade apart (-02 = -0.2 mA vs -0_02 = -0.02 mA), so a run's label can be off
+# by exactly 10x. The fit runs in log-log space with Theil-Sen (median of
+# pairwise slopes) so a single mislabelled point cannot drag the fit toward
+# itself the way it dominates an ordinary least-squares line. Flag only, never
+# correct: the folder name stays the record.
+DECADE_MIN_POINTS = 4
+DECADE_MIN_LEVELS = 3  # distinct |I| values required for a stable slope
+DECADE_TAU_LO = 0.15  # log10 units the shifted point must land within
+DECADE_TAU_HI_FLOOR = 0.3  # log10 units: minimum residual to be suspect at all
+DECADE_TAU_HI_SLOPE_FRACTION = 0.5
+
+
+@dataclass(frozen=True)
+class DecadeMislabelPoint:
+    """One dose-response point's decade-mislabel evidence."""
+
+    run: str
+    log_residual: float
+    shift: int  # +1 = fits 10x higher current, -1 = 10x lower, 0 = clean
+    suspect: bool
+
+
+def decade_mislabel_evidence(
+    amplitudes_mA: np.ndarray,
+    responses_uV: np.ndarray,
+    run_names: tuple[str, ...],
+) -> list[DecadeMislabelPoint]:
+    """Score each point of one wiring/channel sweep for a 10x label error.
+
+    A point is suspect when it sits far off the robust log-log trend AND lands
+    on it when its current is shifted by exactly one decade. Returns one entry
+    per input point, aligned with the inputs; unusable points come back clean.
+    """
+    amplitudes = np.asarray(amplitudes_mA, dtype=np.float64)
+    responses = np.asarray(responses_uV, dtype=np.float64)
+    clean = [
+        DecadeMislabelPoint(run=name, log_residual=float("nan"), shift=0, suspect=False)
+        for name in run_names
+    ]
+
+    usable = np.isfinite(amplitudes) & (np.abs(amplitudes) > 0)
+    usable &= np.isfinite(responses) & (responses > 0)
+    indices = np.flatnonzero(usable)
+    if indices.size < DECADE_MIN_POINTS:
+        return clean
+    x = np.log10(np.abs(amplitudes[indices]))
+    y = np.log10(responses[indices])
+    if np.unique(np.round(x, 6)).size < DECADE_MIN_LEVELS:
+        return clean
+
+    # Theil-Sen: median slope over all pairs with distinct x, median intercept.
+    slopes = [
+        (y[j] - y[i]) / (x[j] - x[i])
+        for i in range(x.size)
+        for j in range(i + 1, x.size)
+        if x[j] != x[i]
+    ]
+    if not slopes:
+        return clean
+    slope = float(np.median(slopes))
+    intercept = float(np.median(y - slope * x))
+
+    tau_hi = max(DECADE_TAU_HI_FLOOR, DECADE_TAU_HI_SLOPE_FRACTION * abs(slope))
+    out = list(clean)
+    for position, index in enumerate(indices):
+        residual = float(y[position] - (intercept + slope * x[position]))
+        shift = 0
+        suspect = False
+        if abs(residual) > tau_hi:
+            candidates = [
+                (abs(residual - s * slope), s)
+                for s in (1, -1)
+                if abs(residual - s * slope) < DECADE_TAU_LO
+            ]
+            if candidates:
+                shift = min(candidates)[1]
+                suspect = True
+        out[index] = DecadeMislabelPoint(
+            run=run_names[index], log_residual=residual, shift=shift, suspect=suspect
+        )
+    return out
+
+
 __all__ = [
     "COUPLING_LATENCY_MS",
     "COUPLING_TAIL_FRACTION",
+    "DECADE_MIN_LEVELS",
+    "DECADE_MIN_POINTS",
+    "DECADE_TAU_HI_FLOOR",
+    "DECADE_TAU_HI_SLOPE_FRACTION",
+    "DECADE_TAU_LO",
+    "DecadeMislabelPoint",
     "RunArtifactEvidence",
     "SweepArtifactEvidence",
+    "decade_mislabel_evidence",
     "run_evidence",
     "sweep_evidence",
 ]

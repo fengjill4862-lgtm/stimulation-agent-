@@ -150,6 +150,22 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
     edge_float = widgets.FloatText(
         value=1.5, description="Edge (ms)", layout=widgets.Layout(width="160px"), style={"description_width": "80px"}
     )
+    pitch_float = widgets.FloatText(
+        value=500.0, description="Pitch (um)", layout=widgets.Layout(width="170px"), style={"description_width": "80px"}
+    )
+    order_text = widgets.Text(
+        value="",
+        description="Contact order",
+        placeholder="optional, e.g. B-017,B-018,B-021",
+        layout=widgets.Layout(width="320px"),
+        style={"description_width": "100px"},
+    )
+    resp_window_float = widgets.FloatText(
+        value=50.0, description="Resp win (ms)", layout=widgets.Layout(width="190px"), style={"description_width": "105px"}
+    )
+    max_period_float = widgets.FloatText(
+        value=1.5, description="Max period (s)", layout=widgets.Layout(width="190px"), style={"description_width": "110px"}
+    )
 
     preview_button = generate_button("Generate Preview", width="170px")
     save_btn = save_button("Save Bundle", width="130px")
@@ -169,6 +185,7 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                 widgets.HBox(
                     [guard_float, lowpass_float, prominence_float, max_peaks_int, search_float, edge_float]
                 ),
+                widgets.HBox([pitch_float, order_text, resp_window_float, max_period_float]),
                 widgets.HTML(
                     value=(
                         "<b>Evoked response to external (Keithley) stimulation, from RHD "
@@ -180,7 +197,10 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                         "coupling rather than a response. Individual peaks (N1/P1/...) are "
                         "detected after the pulse plus a guard, each with amplitude, latency, "
                         "width and per-pulse stability; peaks near the measured off-edge are "
-                        "flagged, not dropped. Single run mode checks one folder in "
+                        "flagged, not dropped. Contact positions are relative (pitch x index; "
+                        "the stim-site offset is unknown). Slow biphasic protocols need Resp "
+                        "win and Max period raised (e.g. 1000 ms / 6 s for 0.5 s pulses at 5 s). "
+                        "Single run mode checks one folder in "
                         "seconds; whole session reads about 1.9 GB. Preview writes nothing; "
                         "Save Bundle writes the whole output set atomically."
                     )
@@ -223,6 +243,10 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                 max_peaks=str(max_peaks_int.value),
                 peak_search_half_ms=str(search_float.value),
                 edge_flag_ms=str(edge_float.value),
+                contact_pitch_um=str(pitch_float.value),
+                contact_order=order_text.value,
+                response_window_ms=str(resp_window_float.value),
+                max_period_s=str(max_period_float.value),
             )
         except ValueError as exc:
             status.value = error_html(str(exc))

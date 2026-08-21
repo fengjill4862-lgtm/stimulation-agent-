@@ -13,8 +13,8 @@ produced instead, and they check each other:
 * **gap-based** -- Welch computed only from the quiet stretch between pulses,
   blanking the response window after each onset, so pulse energy is excluded by
   construction rather than filtered out. Only valid for bands whose period fits
-  several times into the ~200 ms gap, so it is reported for the higher bands and
-  left blank for delta and theta.
+  at least three times into the gap; anything lower is left blank, and the
+  cutoff is reported as ``gap_minimum_hz`` (it depends on the pulse interval).
 """
 
 from __future__ import annotations
@@ -63,6 +63,8 @@ class ChannelBands:
     band_db: dict[str, float]
     band_db_gap: dict[str, float]
     comb_bins_excluded: int
+    # Gap estimates need >= 3 cycles per gap; bands below this are NaN.
+    gap_minimum_hz: float = float("nan")
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,12 @@ def evoked_deflection(
     post_ms = min(config.response_window_ms, train.period_s * 1000.0 - 5.0)
     gap_end_ms = min(config.gap_baseline_end_ms, train.period_s * 1000.0 - 5.0)
     gap_start_ms = min(config.gap_baseline_start_ms, gap_end_ms - 10.0)
+    # When the response window swallows the configured gap baseline (slow
+    # protocols: a 1000 ms window inside a 5 s period), anchor the baseline to
+    # the last 100 ms before the next pulse instead of measuring the response.
+    if gap_start_ms < config.blank_ms:
+        gap_end_ms = train.period_s * 1000.0 - 10.0
+        gap_start_ms = max(config.blank_ms + 5.0, gap_end_ms - 100.0)
 
     for index, channel in enumerate(run.healthy_channels):
         x = run.data.raw_uV[index].astype(np.float64)
@@ -282,7 +290,7 @@ def band_power(run: LoadedRun, train: PulseTrain, config: EvokedConfig) -> list[
             else:
                 band_db[name] = float(10.0 * np.log10(train_power / base_power))
 
-        band_db_gap = _gap_band_power(x, fs, train, config)
+        band_db_gap, gap_minimum_hz = _gap_band_power(x, fs, train, config)
         results.append(
             ChannelBands(
                 channel=channel,
@@ -290,6 +298,7 @@ def band_power(run: LoadedRun, train: PulseTrain, config: EvokedConfig) -> list[
                 band_db=band_db,
                 band_db_gap=band_db_gap,
                 comb_bins_excluded=excluded,
+                gap_minimum_hz=gap_minimum_hz,
             )
         )
 
@@ -298,17 +307,20 @@ def band_power(run: LoadedRun, train: PulseTrain, config: EvokedConfig) -> list[
 
 def _gap_band_power(
     x: np.ndarray, fs: float, train: PulseTrain, config: EvokedConfig
-) -> dict[str, float]:
+) -> tuple[dict[str, float], float]:
     """Cross-check using only the quiet stretch between pulses.
 
-    Valid only for bands whose period fits several times into the gap, so the
-    low bands come back as NaN rather than as a number that cannot be trusted.
+    Valid only for bands whose period fits at least three times into the gap;
+    lower bands come back NaN rather than as a number that cannot be trusted.
+    Returns (band dB dict, minimum valid Hz) so the cutoff can be reported.
     """
     gap_start_ms = config.blank_ms
     gap_stop_ms = train.period_s * 1000.0 - 5.0
     gap_duration_s = (gap_stop_ms - gap_start_ms) / 1000.0
+    all_nan = {name: float("nan") for name, _low, _high in config.bands}
     if gap_duration_s <= 0.02:
-        return {name: float("nan") for name, _low, _high in config.bands}
+        return all_nan, float("inf")
+    minimum_hz = 3.0 / gap_duration_s
 
     segments: list[np.ndarray] = []
     for onset in train.onsets_s:
@@ -317,7 +329,7 @@ def _gap_band_power(
         if start >= 0 and stop <= x.size and stop > start:
             segments.append(x[start:stop])
     if not segments:
-        return {name: float("nan") for name, _low, _high in config.bands}
+        return all_nan, minimum_hz
 
     segment_length = min(len(s) for s in segments)
     nperseg = int(min(segment_length, 2 ** int(np.floor(np.log2(max(32, segment_length))))))
@@ -345,16 +357,15 @@ def _gap_band_power(
         base_chunks.append(x[cursor : cursor + segment_length])
         cursor -= segment_length
     if not base_chunks:
-        return {name: float("nan") for name, _low, _high in config.bands}
+        return all_nan, minimum_hz
 
     freqs, psd_train = _average_psd(segments)
     _, psd_base = _average_psd(base_chunks)
     if freqs.size == 0 or psd_base.size != psd_train.size:
-        return {name: float("nan") for name, _low, _high in config.bands}
+        return all_nan, minimum_hz
 
     keep = np.ones(freqs.size, dtype=bool)
     # A band needs at least three cycles inside one gap to be estimable here.
-    minimum_hz = 3.0 / gap_duration_s
     out: dict[str, float] = {}
     for name, low, high in config.bands:
         if low < minimum_hz:
@@ -366,7 +377,7 @@ def _gap_band_power(
             out[name] = float("nan")
         else:
             out[name] = float(10.0 * np.log10(train_power / base_power))
-    return out
+    return out, minimum_hz
 
 
 def _dominant_rhythm_hz(x: np.ndarray, fs: float) -> float:

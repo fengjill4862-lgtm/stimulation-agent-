@@ -28,7 +28,7 @@ from .metrics import (
     evoked_deflection,
     post_train_change,
 )
-from .naming import RunCondition, discover_runs
+from .naming import RunCondition, contact_positions_um, discover_runs
 from .peaks import ChannelPeaks, analyse_channel_peaks
 from .pulses import PulseTrain, recover_pulses
 
@@ -131,7 +131,9 @@ def analyse_run(
     return result
 
 
-def _rows_for(result: RunResult, config: EvokedConfig) -> list[dict]:
+def _rows_for(
+    result: RunResult, config: EvokedConfig, positions: dict[str, float] | None = None
+) -> list[dict]:
     """Flatten one run into one row per channel."""
     condition = result.condition
     train = result.train
@@ -205,12 +207,14 @@ def _rows_for(result: RunResult, config: EvokedConfig) -> list[dict]:
             row["artifact_fast_latency_post"] = evidence.fast_latency_post
             row["artifact_coupling_ratio"] = evidence.coupling_ratio
             row["artifact_post_response_detected"] = evidence.post_response_detected
+        row["contact_position_um"] = (positions or {}).get(evoked.channel, float("nan"))
+        row["band_gap_minimum_hz"] = bands.gap_minimum_hz if bands else float("nan")
         rows.append(row)
 
     return rows
 
 
-def _peak_rows_for(result: RunResult) -> list[dict]:
+def _peak_rows_for(result: RunResult, positions: dict[str, float] | None = None) -> list[dict]:
     """Flatten one run into one row per channel and detected peak (long format)."""
     condition = result.condition
     rows: list[dict] = []
@@ -238,6 +242,9 @@ def _peak_rows_for(result: RunResult) -> list[dict]:
                     "present": peak.present,
                     "adaptation_ratio": peak.adaptation_ratio,
                     "amp_slope_uV_per_pulse": peak.amp_slope_uV_per_pulse,
+                    "contact_position_um": (positions or {}).get(
+                        channel_peaks.channel, float("nan")
+                    ),
                 }
             )
     return rows
@@ -259,6 +266,51 @@ def _sweep_evidence(rows: list[dict]) -> list[artifact_module.SweepArtifactEvide
         if evidence is not None:
             out.append(evidence)
     return out
+
+
+def _apply_decade_flags(rows: list[dict]) -> None:
+    """Flag runs whose response fits a current 10x off its label. Mutates rows.
+
+    Detection is per (wiring, channel); a mislabel is a property of the run's
+    folder name, so a run is flagged only when at least half of its tested
+    channels agree on the same decade shift. Flag only, never correct.
+    """
+    for row in rows:
+        row["decade_suspect"] = False
+        row["decade_suspect_note"] = ""
+
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        if row.get("amplitude_mA") is None:
+            continue
+        grouped.setdefault((row["wiring"], row["channel"]), []).append(row)
+
+    votes: dict[str, dict[int, set[str]]] = {}
+    tested: dict[str, set[str]] = {}
+    for (_wiring, channel), group in grouped.items():
+        amplitudes = np.array([r["amplitude_mA"] for r in group], dtype=np.float64)
+        responses = np.array([r["evoked_pp_uV"] for r in group], dtype=np.float64)
+        names = tuple(str(r["run"]) for r in group)
+        points = artifact_module.decade_mislabel_evidence(amplitudes, responses, names)
+        if len(points) < len(group):
+            continue
+        finite = any(np.isfinite(p.log_residual) for p in points)
+        for point in points:
+            if finite:
+                tested.setdefault(point.run, set()).add(channel)
+            if point.suspect:
+                votes.setdefault(point.run, {}).setdefault(point.shift, set()).add(channel)
+
+    for run_name, shifts in votes.items():
+        shift, channels = max(shifts.items(), key=lambda item: len(item[1]))
+        if 2 * len(channels) < len(tested.get(run_name, channels)):
+            continue
+        direction = "higher" if shift > 0 else "lower"
+        note = f"response fits 10x {direction} current"
+        for row in rows:
+            if str(row.get("run")) == run_name:
+                row["decade_suspect"] = True
+                row["decade_suspect_note"] = note
 
 
 def _comb_z(result: RunResult) -> float:
@@ -331,11 +383,14 @@ def run_session(config: EvokedConfig, progress: ProgressCallback | None = None) 
             if retimed.ok and retimed.train and retimed.train.comb_z > _comb_z(result.runs[index]):
                 result.runs[index] = retimed
 
+    all_channels = sorted({ch for r in result.runs for ch in r.healthy_channels})
+    positions = contact_positions_um(all_channels, config.contact_pitch_um, config.contact_order)
     for run_result in result.runs:
-        result.rows.extend(_rows_for(run_result, config))
-        result.peak_rows.extend(_peak_rows_for(run_result))
+        result.rows.extend(_rows_for(run_result, config, positions))
+        result.peak_rows.extend(_peak_rows_for(run_result, positions))
 
     result.sweep = _sweep_evidence(result.rows)
+    _apply_decade_flags(result.rows)
 
     unknown = [r for r in selected if r.amplitude_mA is None]
     if unknown:
@@ -377,8 +432,12 @@ def run_single(config: EvokedConfig, progress: ProgressCallback | None = None) -
     result = SessionResult(config=config)
     run_result = analyse_run(condition, config)
     result.runs.append(run_result)
-    result.rows.extend(_rows_for(run_result, config))
-    result.peak_rows.extend(_peak_rows_for(run_result))
+    positions = contact_positions_um(
+        sorted(run_result.healthy_channels), config.contact_pitch_um, config.contact_order
+    )
+    result.rows.extend(_rows_for(run_result, config, positions))
+    result.peak_rows.extend(_peak_rows_for(run_result, positions))
+    _apply_decade_flags(result.rows)
     result.notes.append("Single-run mode: no session-wide period prior was available.")
     if progress is not None:
         progress("done")

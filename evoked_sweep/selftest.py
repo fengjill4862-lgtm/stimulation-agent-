@@ -22,13 +22,19 @@ import numpy as np
 from rhd_reader import AMPLIFIER_OFFSET, AMPLIFIER_SCALE_uV
 from rhd_reader_selftest import build_rhd_bytes
 
-from .artifact import run_evidence, sweep_evidence
+from .artifact import decade_mislabel_evidence, run_evidence, sweep_evidence
 from .config import EvokedConfig
 from .load import load_run
 from .metrics import band_power, evoked_deflection
-from .naming import discover_runs, parse_amplitude, parse_wiring
+from .naming import (
+    contact_index,
+    contact_positions_um,
+    discover_runs,
+    parse_amplitude,
+    parse_wiring,
+)
 from .peaks import analyse_channel_peaks
-from .pipeline import run_single
+from .pipeline import _apply_decade_flags, run_single
 from .pulses import PulseTrain, recover_pulses
 
 FS = 5000.0
@@ -98,9 +104,18 @@ def make_run(
         template -= 150.0 * np.exp(-0.5 * ((t_ms - 9.0) / 1.0) ** 2)  # N component
         template += 300.0 * np.exp(-0.5 * ((t_ms - 15.0) / 2.5) ** 2)  # P component
 
+    if shape == "biphasic":
+        # The slow Keithley waveform: 0.2 s cathodic-analog phase, 0.1 s
+        # interphase pause, 0.2 s opposite phase. Total width = pulse_width_ms.
+        phase = int(round(0.2 * FS))
+        pause = int(round(0.1 * FS))
+        template = np.zeros(2 * phase + pause)
+        template[:phase] += amplitude_uV
+        template[phase + pause :] -= amplitude_uV
+
     for onset in onsets:
         start = int(round(onset * FS))
-        if shape == "ep":
+        if shape in ("ep", "biphasic"):
             stop = min(n_samples, start + template.size)
             signal[start:stop] += template[: stop - start]
         elif shape == "coupling":
@@ -178,6 +193,23 @@ def test_naming() -> None:
     check(
         parse_wiring("stim 1 recording ground 3 common ground - artifact").common_ground,
         "common ground detected",
+    )
+
+    check(contact_index("B-017") == 17, "contact index from trailing digits")
+    positions = contact_positions_um(("B-017", "B-018", "B-021"), 500.0)
+    check(
+        positions == {"B-017": 0.0, "B-018": 500.0, "B-021": 2000.0},
+        f"relative positions by index x pitch (got {positions})",
+    )
+    ordered = contact_positions_um(("B-021", "B-017"), 500.0, order=("B-021", "B-017"))
+    check(
+        ordered == {"B-021": 0.0, "B-017": 500.0},
+        f"explicit contact order overrides indices (got {ordered})",
+    )
+    unknown = contact_positions_um(("B-017", "weird"), 500.0)
+    check(
+        unknown["B-017"] == 0.0 and unknown["weird"] != unknown["weird"],
+        "channel without trailing digits gets NaN position",
     )
 
 
@@ -423,14 +455,25 @@ def test_peak_windows_and_detection(tmp: Path) -> None:
             "evoked_pp_during_uV", "evoked_pp_post_uV", "post_peak_latency_ms",
             "baseline_sd_uV", "n_peaks", "n_peaks_clean", "artifact_fast_latency_post",
             "artifact_coupling_ratio", "artifact_post_response_detected",
+            "contact_position_um", "band_gap_minimum_hz",
+            "decade_suspect", "decade_suspect_note",
         )
         missing_new = [key for key in added if key not in row]
         check(not missing_new, f"new runs.csv columns present (missing: {missing_new})")
+        b017 = next((r for r in single.rows if r["channel"] == "B-017"), None)
+        check(
+            b017 is not None and b017["contact_position_um"] == 0.0,
+            "B-017 sits at relative position 0",
+        )
     check(bool(single.peak_rows), "single-run pipeline produced peak rows")
     if single.peak_rows:
         check(
             any(r["peak_label"].startswith("P") for r in single.peak_rows),
             "pipeline peak rows include a positive component",
+        )
+        check(
+            "contact_position_um" in single.peak_rows[0],
+            "peak rows carry the contact position",
         )
 
 
@@ -466,6 +509,178 @@ def test_band_power_excludes_the_comb(tmp: Path) -> None:
         )
 
 
+def test_decade_mislabel() -> None:
+    print("decade-mislabel detection on a known bad label")
+    amplitudes = np.array([0.01, 0.02, 0.05, 0.1, 0.2, 0.5])
+    clean_responses = 2000.0 * np.abs(amplitudes)
+    names = tuple(f"run{i}" for i in range(amplitudes.size))
+
+    points = decade_mislabel_evidence(amplitudes, clean_responses, names)
+    check(not any(p.suspect for p in points), "clean linear sweep raises no suspects")
+
+    # The -0_02 / -02 style mistake: the 0.02 run actually delivered 0.2 mA.
+    bad = clean_responses.copy()
+    bad[1] = 2000.0 * 0.2
+    points = decade_mislabel_evidence(amplitudes, bad, names)
+    suspects = [p for p in points if p.suspect]
+    check(
+        len(suspects) == 1 and suspects[0].run == "run1" and suspects[0].shift == 1,
+        f"exactly the mislabelled point flagged with shift +1 "
+        f"(got {[(p.run, p.shift) for p in suspects]})",
+    )
+
+    few = decade_mislabel_evidence(amplitudes[:3], bad[:3], names[:3])
+    check(not any(p.suspect for p in few), "fewer than 4 points never flags")
+
+    # Run-level aggregation: both channels flag the same run -> run flagged.
+    rows = []
+    for channel in ("B-017", "B-018"):
+        for amplitude, response, name in zip(amplitudes, bad, names):
+            rows.append(
+                {
+                    "run": name,
+                    "wiring": "w",
+                    "channel": channel,
+                    "amplitude_mA": float(amplitude),
+                    "evoked_pp_uV": float(response),
+                }
+            )
+    _apply_decade_flags(rows)
+    flagged = {r["run"] for r in rows if r["decade_suspect"]}
+    check(flagged == {"run1"}, f"run-level flag set on the mislabelled run (got {flagged})")
+    check(
+        all("10x higher" in r["decade_suspect_note"] for r in rows if r["decade_suspect"]),
+        "note names the direction",
+    )
+    clean_rows = [dict(r, evoked_pp_uV=2000.0 * abs(r["amplitude_mA"])) for r in rows]
+    _apply_decade_flags(clean_rows)
+    check(
+        all(r["decade_suspect"] is False and r["decade_suspect_note"] == "" for r in clean_rows),
+        "clean rows keep both columns present and unset",
+    )
+
+
+def test_gap_band_power_validity(tmp: Path) -> None:
+    print("gap band power reports its validity cutoff")
+    session = tmp / "gapbands"
+    folder = session / "cfg stim 1 stim ground 2 recording ground 3" / "+0_2mA_260819_140000"
+    make_run(
+        folder,
+        amplitude_uV=600.0,
+        shape="coupling",
+        period_s=1.2,
+        n_pulses=20,
+        duration_s=45.0,
+        gamma_boost_uV=150.0,
+        seed=33,
+    )
+
+    config = _config(session)
+    condition = discover_runs(session)[0]
+    loaded = load_run(condition, config)
+    train = recover_pulses(loaded, config)
+    bands = band_power(loaded, train, config)
+    check(bool(bands), "band power computed for the long-period run")
+    if bands:
+        gap_duration_s = (train.period_s * 1000.0 - 5.0 - config.blank_ms) / 1000.0
+        expected_minimum = 3.0 / gap_duration_s
+        check(
+            abs(bands[0].gap_minimum_hz - expected_minimum) < 0.05 * expected_minimum,
+            f"gap_minimum_hz ~= 3/gap ({bands[0].gap_minimum_hz:.2f} vs {expected_minimum:.2f})",
+        )
+        check(
+            np.isfinite(bands[0].band_db_gap["gamma"]),
+            "gamma gap estimate finite at a 1.2 s period",
+        )
+        check(
+            not np.isfinite(bands[0].band_db_gap["delta"]),
+            "delta gap estimate still NaN at a 1.2 s period",
+        )
+
+
+def test_slow_protocol(tmp: Path) -> None:
+    print("slow biphasic protocol: 0.5 s pulses at 5 s period")
+    session = tmp / "slow"
+    folder = session / "cfg stim 1 stim ground 2 recording ground 3" / "+0_05mA_260819_150000"
+    truth = make_run(
+        folder,
+        amplitude_uV=800.0,
+        shape="biphasic",
+        period_s=5.0,
+        n_pulses=10,
+        pulse_width_ms=500.0,
+        duration_s=70.0,
+        seed=35,
+    )
+
+    # envelope_ms raised: 0.5 ms bins over 70 s make the quadratic
+    # autocorrelation in the comb search painfully slow; 2 ms bins still
+    # resolve the 200 ms phases easily.
+    config = _config(
+        session,
+        expected_pulses=10,
+        pulse_width_ms=500.0,
+        max_period_s=6.0,
+        response_window_ms=1000.0,
+        envelope_ms=2.0,
+    )
+    condition = discover_runs(session)[0]
+    loaded = load_run(condition, config)
+    train = recover_pulses(loaded, config)
+    check(train.n_pulses == 10, f"10 slow pulses recovered (got {train.n_pulses})")
+    if train.n_pulses == 10:
+        check(abs(train.period_s - 5.0) < 0.05, f"period 5 s (got {train.period_s:.3f})")
+        error_ms = np.abs(train.onsets_s - truth) * 1000.0
+        check(float(np.median(error_ms)) < 10.0, f"median onset error {np.median(error_ms):.1f} ms")
+
+        evoked = evoked_deflection(loaded, train, config)
+        check(bool(evoked), "evoked measured for the slow run")
+        if evoked:
+            first = evoked[0]
+            check(
+                first.during_pp_uV_median > 1200.0,
+                f"during-pulse p-p sees the biphasic swing ({first.during_pp_uV_median:.0f} uV)",
+            )
+            check(
+                first.post_pp_uV_median < first.during_pp_uV_median / 3.0,
+                "post window is quiet next to the pulse",
+            )
+            check(
+                np.isfinite(first.gap_baseline_pp_uV)
+                and first.gap_baseline_pp_uV < first.pp_uV_median,
+                "auto-relocated gap baseline is finite and below the evoked p-p",
+            )
+
+        bands = band_power(loaded, train, config)
+        check(bool(bands), "band power computed for the slow run")
+        if bands:
+            check(
+                bands[0].gap_minimum_hz < 1.0,
+                f"gap valid below delta ({bands[0].gap_minimum_hz:.2f} Hz)",
+            )
+            check(
+                np.isfinite(bands[0].band_db_gap["delta"]),
+                "delta gap estimate finite at a 5 s period",
+            )
+
+    from .config import config_from_text_fields
+
+    parsed = config_from_text_fields(
+        session_folder=str(session),
+        response_window_ms="1000",
+        max_period_s="6",
+        contact_pitch_um="500",
+        contact_order="B-017, B-018",
+    )
+    check(
+        parsed.response_window_ms == 1000.0
+        and parsed.max_period_s == 6.0
+        and parsed.contact_pitch_um == 500.0
+        and parsed.contact_order == ("B-017", "B-018"),
+        "config_from_text_fields round-trips the four new fields",
+    )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="evoked_selftest_") as name:
         tmp = Path(name)
@@ -477,6 +692,9 @@ def main() -> int:
         test_artifact_criteria_separate_shapes(tmp)
         test_peak_windows_and_detection(tmp)
         test_band_power_excludes_the_comb(tmp)
+        test_decade_mislabel()
+        test_gap_band_power_validity(tmp)
+        test_slow_protocol(tmp)
 
     print()
     if _failures:

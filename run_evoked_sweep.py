@@ -28,6 +28,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pulses", default="50", help="expected pulses per train")
     parser.add_argument("--width-ms", default="5", help="expected pulse width in ms")
     parser.add_argument("--max-runs", default="", help="limit the number of runs analysed")
+    parser.add_argument("--response-window-ms", default="", help="post-onset window, default 50")
+    parser.add_argument("--max-period-s", default="", help="comb-search ceiling, default 1.5")
+    parser.add_argument("--pitch-um", default="", help="contact pitch, default 500")
+    parser.add_argument("--contact-order", default="", help="optional physical channel order")
     parser.add_argument("--save", action="store_true", help="write outputs (default: print only)")
     args = parser.parse_args(argv)
 
@@ -39,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
             pulse_width_ms=args.width_ms,
             single_run="1" if args.single else "",
             max_runs=args.max_runs,
+            response_window_ms=args.response_window_ms,
+            max_period_s=args.max_period_s,
+            contact_pitch_um=args.pitch_um,
+            contact_order=args.contact_order,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

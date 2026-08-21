@@ -268,6 +268,42 @@ def _sweep_evidence(rows: list[dict]) -> list[artifact_module.SweepArtifactEvide
     return out
 
 
+def _apply_wiring_filter(
+    conditions: list[RunCondition], config: EvokedConfig
+) -> tuple[list[RunCondition], str | None]:
+    """Keep runs whose wiring folder name passes the include/exclude terms.
+
+    Terms are case-insensitive substrings of the config folder name. Include
+    (when given) is applied first, then exclude -- so "artifact" in the
+    exclude field drops the configs the user marked as artifact-generating.
+    Returns (kept runs, a note describing what was dropped, or None).
+    """
+    if not config.wiring_include and not config.wiring_exclude:
+        return conditions, None
+
+    def _keep(condition: RunCondition) -> bool:
+        name = condition.wiring.raw_name.lower()
+        if config.wiring_include and not any(term in name for term in config.wiring_include):
+            return False
+        return not any(term in name for term in config.wiring_exclude)
+
+    kept = [c for c in conditions if _keep(c)]
+    dropped = [c for c in conditions if not _keep(c)]
+    if not dropped:
+        return kept, None
+    dropped_configs = sorted({c.wiring.raw_name for c in dropped})
+    parts = []
+    if config.wiring_include:
+        parts.append(f"include={', '.join(config.wiring_include)}")
+    if config.wiring_exclude:
+        parts.append(f"exclude={', '.join(config.wiring_exclude)}")
+    note = (
+        f"{len(dropped)} run(s) skipped by the wiring filter ({'; '.join(parts)}): "
+        + "; ".join(dropped_configs)
+    )
+    return kept, note
+
+
 def _apply_decade_flags(rows: list[dict]) -> None:
     """Flag runs whose response fits a current 10x off its label. Mutates rows.
 
@@ -356,6 +392,10 @@ def run_session(config: EvokedConfig, progress: ProgressCallback | None = None) 
     result = SessionResult(config=config)
     if skipped:
         result.notes.append(f"{skipped} baseline recording(s) found and not analysed as stimulus runs.")
+
+    stim_runs, filter_note = _apply_wiring_filter(stim_runs, config)
+    if filter_note:
+        result.notes.append(filter_note)
 
     selected = stim_runs[: config.max_runs] if config.max_runs else stim_runs
     total_bytes = sum(run_size_bytes(c) for c in selected)

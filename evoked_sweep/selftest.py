@@ -34,7 +34,7 @@ from .naming import (
     parse_wiring,
 )
 from .peaks import analyse_channel_peaks
-from .pipeline import _apply_decade_flags, run_single
+from .pipeline import _apply_decade_flags, _apply_wiring_filter, run_single
 from .pulses import PulseTrain, recover_pulses
 
 FS = 5000.0
@@ -681,6 +681,74 @@ def test_slow_protocol(tmp: Path) -> None:
     )
 
 
+def test_wiring_scope_and_filter(tmp: Path) -> None:
+    print("wiring-folder sessions and the wiring filter")
+    # Pointing "whole session" directly at ONE wiring-condition folder: the
+    # flat runs and the nested-amplitude runs must all belong to that wiring.
+    wcfg = tmp / "scope" / "stim 1 stim ground 2 recording ground 3"
+    make_run(wcfg / "-0_01mA_260819_170000", amplitude_uV=200.0, n_pulses=1, duration_s=5.0, first_onset_s=2.0)
+    make_run(wcfg / "-0_05mA" / "-0_260819_171000", amplitude_uV=200.0, n_pulses=1, duration_s=5.0, first_onset_s=2.0)
+
+    conditions = discover_runs(wcfg)
+    check(len(conditions) == 2, f"both runs found under the wiring folder (got {len(conditions)})")
+    check(
+        all(c.wiring.label == "stim 1 / gnd 2 / ref 3" for c in conditions),
+        f"every run carries the folder's wiring (got {[c.wiring.label for c in conditions]})",
+    )
+    check(
+        all("baseline_recording" not in c.flags for c in conditions),
+        "no run misread as a session-root baseline",
+    )
+    nested = next(c for c in conditions if "amplitude_from_parent" in c.flags)
+    check(
+        nested.amplitude_mA is not None and abs(nested.amplitude_mA + 0.05) < 1e-9,
+        "nested run still inherits its amplitude from the -0_05mA folder",
+    )
+
+    # The include/exclude filter, on a two-config session.
+    session = tmp / "filter"
+    make_run(
+        session / "stim 1 stim ground 2 recording ground 3" / "-0_01mA_260819_170000",
+        amplitude_uV=200.0, n_pulses=1, duration_s=5.0, first_onset_s=2.0,
+    )
+    make_run(
+        session / "stim 1 recording ground 3 common ground - artifact" / "-0_01mA_260819_171500",
+        amplitude_uV=200.0, n_pulses=1, duration_s=5.0, first_onset_s=2.0,
+    )
+    conditions = discover_runs(session)
+    check(len(conditions) == 2, "two configs discovered")
+
+    kept, note = _apply_wiring_filter(
+        conditions, _config(session, wiring_exclude=("artifact",))
+    )
+    check(
+        [c.wiring.label for c in kept] == ["stim 1 / gnd 2 / ref 3"] and note is not None,
+        f"exclude=artifact drops the artifact config (kept {[c.wiring.label for c in kept]})",
+    )
+    kept, _note = _apply_wiring_filter(
+        conditions, _config(session, wiring_include=("stim ground 2",))
+    )
+    check(
+        [c.wiring.label for c in kept] == ["stim 1 / gnd 2 / ref 3"],
+        "include filter keeps only the matching config",
+    )
+    kept, note = _apply_wiring_filter(conditions, _config(session))
+    check(len(kept) == 2 and note is None, "no filter terms means no filtering")
+
+    from .config import config_from_text_fields
+
+    parsed = config_from_text_fields(
+        session_folder=str(session),
+        wiring_include="stim ground 2, stim 2",
+        wiring_exclude="Artifact",
+    )
+    check(
+        parsed.wiring_include == ("stim ground 2", "stim 2")
+        and parsed.wiring_exclude == ("artifact",),
+        "filter fields parse as lowercase comma-separated terms",
+    )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="evoked_selftest_") as name:
         tmp = Path(name)
@@ -695,6 +763,7 @@ def main() -> int:
         test_decade_mislabel()
         test_gap_band_power_validity(tmp)
         test_slow_protocol(tmp)
+        test_wiring_scope_and_filter(tmp)
 
     print()
     if _failures:

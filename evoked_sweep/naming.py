@@ -225,8 +225,16 @@ def discover_runs(session_folder: Path) -> list[RunCondition]:
     A run folder is any folder directly containing ``*.rhd`` files. Walking for
     that rather than assuming a depth handles both the flat layout and the
     nested ``-0_05mA/<run>`` case in this session.
+
+    The session folder may itself be one wiring-condition folder (its name
+    carries "stim"): every run below it then belongs to that wiring, including
+    the runs sitting directly inside it. Without this, those depth-1 runs were
+    misread as session-root baselines and skipped.
     """
     session_folder = Path(session_folder).expanduser()
+    root_wiring = (
+        parse_wiring(session_folder.name) if "stim" in session_folder.name.lower() else None
+    )
     runs: list[RunCondition] = []
 
     for path in sorted(session_folder.rglob("*")):
@@ -237,10 +245,13 @@ def discover_runs(session_folder: Path) -> list[RunCondition]:
 
         relative = path.relative_to(session_folder)
         parts = relative.parts
-        # The configuration folder is the top-level one; runs directly under the
-        # session folder (the numbered baselines) have no configuration.
-        config_name = parts[0] if len(parts) > 1 else ""
-        wiring = parse_wiring(config_name) if config_name else Wiring(raw_name="(session root)")
+        if root_wiring is not None:
+            wiring = root_wiring
+        else:
+            # The configuration folder is the top-level one; runs directly under
+            # the session folder (the numbered baselines) have no configuration.
+            config_name = parts[0] if len(parts) > 1 else ""
+            wiring = parse_wiring(config_name) if config_name else Wiring(raw_name="(session root)")
         parent_name = parts[-2] if len(parts) > 1 else None
         runs.append(parse_run(path, wiring, parent_name))
 

@@ -47,6 +47,13 @@ class EvokedConfig:
     contact_pitch_um: float = 500.0
     contact_order: tuple[str, ...] | None = None  # None: by trailing index
 
+    # Wiring-condition filter for whole-session mode. Comma-separated,
+    # case-insensitive substrings matched against the config folder name:
+    # include (None = every wiring) is applied first, then exclude (e.g.
+    # "artifact" drops the configs the user marked as artifact-generating).
+    wiring_include: tuple[str, ...] | None = None
+    wiring_exclude: tuple[str, ...] = ()
+
     # Protocol (known, used as priors and as correctness checks).
     expected_pulses: int = 50
     pulse_width_ms: float = 5.0
@@ -121,6 +128,8 @@ def config_from_text_fields(
     contact_order: str = "",
     response_window_ms: str = "",
     max_period_s: str = "",
+    wiring_include: str = "",
+    wiring_exclude: str = "",
 ) -> EvokedConfig:
     """Build an EvokedConfig from raw widget or CLI strings.
 
@@ -194,6 +203,15 @@ def config_from_text_fields(
             part.strip() for part in order_text.replace(",", " ").upper().split() if part.strip()
         ) or None
 
+    def _filter_terms(text: str) -> tuple[str, ...]:
+        # Comma-separated only: wiring folder names contain spaces.
+        return tuple(
+            part.strip().lower() for part in _clean(text).split(",") if part.strip()
+        )
+
+    include_terms = _filter_terms(wiring_include)
+    exclude_terms = _filter_terms(wiring_exclude)
+
     return EvokedConfig(
         session_folder=folder,
         single_run=_clean(single_run).lower() in ("1", "true", "yes", "on", "single"),
@@ -211,6 +229,8 @@ def config_from_text_fields(
         contact_order=order_value,
         response_window_ms=_positive_float(response_window_ms, "Response window (ms)", 50.0),
         max_period_s=_positive_float(max_period_s, "Max period (s)", 1.5),
+        wiring_include=include_terms or None,
+        wiring_exclude=exclude_terms,
     )
 
 

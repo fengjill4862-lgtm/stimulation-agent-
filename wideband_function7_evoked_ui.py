@@ -166,6 +166,20 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
     max_period_float = widgets.FloatText(
         value=1.5, description="Max period (s)", layout=widgets.Layout(width="190px"), style={"description_width": "110px"}
     )
+    wiring_include_text = widgets.Text(
+        value="",
+        description="Wiring incl",
+        placeholder="empty = every wiring; comma-separated substrings",
+        layout=widgets.Layout(width="340px"),
+        style={"description_width": "85px"},
+    )
+    wiring_exclude_text = widgets.Text(
+        value="",
+        description="Wiring excl",
+        placeholder="e.g. artifact",
+        layout=widgets.Layout(width="280px"),
+        style={"description_width": "85px"},
+    )
 
     preview_button = generate_button("Generate Preview", width="170px")
     save_btn = save_button("Save Bundle", width="130px")
@@ -186,6 +200,7 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                     [guard_float, lowpass_float, prominence_float, max_peaks_int, search_float, edge_float]
                 ),
                 widgets.HBox([pitch_float, order_text, resp_window_float, max_period_float]),
+                widgets.HBox([wiring_include_text, wiring_exclude_text]),
                 widgets.HTML(
                     value=(
                         "<b>Evoked response to external (Keithley) stimulation, from RHD "
@@ -247,6 +262,8 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                 contact_order=order_text.value,
                 response_window_ms=str(resp_window_float.value),
                 max_period_s=str(max_period_float.value),
+                wiring_include=wiring_include_text.value,
+                wiring_exclude=wiring_exclude_text.value,
             )
         except ValueError as exc:
             status.value = error_html(str(exc))

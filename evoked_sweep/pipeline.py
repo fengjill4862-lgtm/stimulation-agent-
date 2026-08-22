@@ -520,15 +520,17 @@ def run_single(config: EvokedConfig, progress: ProgressCallback | None = None) -
     if not any(folder.glob("*.rhd")):
         raise ValueError(f"No .rhd files directly in {folder}. Point at a single run folder.")
 
-    # The wiring lives in the configuration folder, which is the parent for a
-    # flat run and the grandparent for a run nested under an amplitude folder.
+    # The user's wiring label always wins; otherwise the wiring lives in the
+    # configuration folder -- the parent for a flat run, the grandparent for a
+    # run nested under an amplitude folder.
     wiring = None
-    for candidate in (folder.parent, folder.parent.parent):
-        if "stim" in candidate.name.lower():
-            wiring = parse_wiring(candidate.name)
-            break
-    if wiring is None and config.wiring_label:
+    if config.wiring_label:
         wiring = Wiring(raw_name=config.wiring_label)
+    if wiring is None:
+        for candidate in (folder.parent, folder.parent.parent):
+            if "stim" in candidate.name.lower():
+                wiring = parse_wiring(candidate.name)
+                break
     if wiring is None:
         wiring = parse_wiring(folder.parent.name)
 

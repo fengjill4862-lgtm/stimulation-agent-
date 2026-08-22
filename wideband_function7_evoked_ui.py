@@ -220,9 +220,12 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                 widgets.HTML(
                     value=(
                         "<b>Evoked response to external (Keithley) stimulation, from RHD "
-                        "recordings.</b> Nothing recorded the trigger, so pulse onsets are "
-                        "recovered by fitting the known train -- 50 pulses, 5 ms wide -- to the "
-                        "amplifier trace, and every run reports whether that fit is trustworthy. "
+                        "recordings.</b> Pulse timing comes from the oscilloscope captures and "
+                        "onset files when a session has them (Scope dir; timing column 'src' = "
+                        "scope); otherwise onsets are recovered by fitting the expected train "
+                        "to the amplifier trace, and every run reports whether that fit is "
+                        "trustworthy. Protocol-named runs (0.001mA_-0.001mA_pulsewidth... "
+                        "folders) override Pulses/Width per run automatically. "
                         "Measures per-pulse deflection, band power (train vs baseline) and "
                         "post-train change, and flags deflections that look like stimulus "
                         "coupling rather than a response. Individual peaks (N1/P1/...) are "

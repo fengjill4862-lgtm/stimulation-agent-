@@ -39,6 +39,12 @@ class PulseTrain:
     issues: tuple[str, ...] = field(default_factory=tuple)
     # How many SD the winning comb alignment beats every other alignment by.
     comb_z: float = float("nan")
+    # Timing provenance. "comb" = fitted to the amplifier trace alone;
+    # "scope" = oscilloscope capture + onset file (see scope_sync).
+    source: str = "comb"
+    clock_offset_s: float = float("nan")  # stim-host clock minus Intan folder clock
+    scope_capture: str = ""
+    align_z: float = float("nan")  # scope-template alignment confidence
 
     @property
     def n_pulses(self) -> int:

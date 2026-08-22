@@ -27,6 +27,13 @@ _TIMESTAMP = re.compile(r"_\d{6}_\d{6}")
 _AMPLITUDE = re.compile(r"^([+-]?)(\d+(?:_\d+)?)")
 _HAS_MILLIAMPS = re.compile(r"mA", re.IGNORECASE)
 _INTEGER = re.compile(r"(?:^|\s)(\d+)(?=\s|$|mA)", re.IGNORECASE)
+# The 20260821-style protocol name written by the stim-control script:
+# 0.001mA_-0.001mA_pulsewidth0.3s_interval4.5s_pulsenumber25. Dots are real
+# decimal points here, unlike the legacy underscore convention.
+_PROTOCOL = re.compile(
+    r"^([+-]?\d+(?:\.\d+)?)mA_([+-]?\d+(?:\.\d+)?)mA"
+    r"_pulsewidth(\d+(?:\.\d+)?)s_interval(\d+(?:\.\d+)?)s_pulsenumber(\d+)$"
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +70,17 @@ class Wiring:
 
 
 @dataclass(frozen=True)
+class ProtocolInfo:
+    """Stimulation parameters encoded in a 20260821-style protocol name."""
+
+    amplitude_mA: float  # leading phase, signed: positive = anodic-leading
+    second_phase_mA: float
+    pulse_width_s: float
+    interval_s: float
+    pulse_number: int
+
+
+@dataclass(frozen=True)
 class RunCondition:
     """One recording folder's condition, plus every caveat attached to it."""
 
@@ -75,6 +93,12 @@ class RunCondition:
     replicate: int | None = None
     flags: tuple[str, ...] = field(default_factory=tuple)
     notes: str = ""
+    # Per-run protocol from a 20260821-style name; None/"" for legacy sessions.
+    expected_pulses_run: int | None = None
+    pulse_width_s_run: float | None = None
+    interval_s_run: float | None = None
+    protocol_source: str = ""  # "", "folder_name", "onset_txt", "rhd_name"
+    has_onset_file: bool = False
 
     @property
     def amplitude_label(self) -> str:
@@ -93,6 +117,51 @@ class RunCondition:
         return "cathodic" if self.amplitude_mA < 0 else "anodic"
 
 
+def parse_protocol_name(text: str) -> ProtocolInfo | None:
+    """Parse a 20260821-style protocol name, with or without its extension."""
+    cleaned = text.strip()
+    for suffix in (".onset.txt", ".rhd"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+            break
+    match = _PROTOCOL.match(cleaned)
+    if match is None:
+        return None
+    return ProtocolInfo(
+        amplitude_mA=float(match.group(1)),
+        second_phase_mA=float(match.group(2)),
+        pulse_width_s=float(match.group(3)),
+        interval_s=float(match.group(4)),
+        pulse_number=int(match.group(5)),
+    )
+
+
+def protocol_for_run(run_folder: Path) -> tuple[ProtocolInfo | None, str]:
+    """Find protocol info for a run: folder name, then file names inside.
+
+    Name-only -- never opens a file; the onset epoch value inside the
+    ``.onset.txt`` is read later by ``scope_sync``.
+    """
+    info = parse_protocol_name(run_folder.name)
+    if info is not None:
+        return info, "folder_name"
+    try:
+        children = sorted(child.name for child in run_folder.iterdir() if child.is_file())
+    except OSError:
+        return None, ""
+    for name in children:
+        if name.endswith(".onset.txt"):
+            info = parse_protocol_name(name)
+            if info is not None:
+                return info, "onset_txt"
+    for name in children:
+        if name.endswith(".rhd"):
+            info = parse_protocol_name(name)
+            if info is not None:
+                return info, "rhd_name"
+    return None, ""
+
+
 def parse_amplitude(text: str) -> tuple[float | None, bool]:
     """Parse a leading amplitude token. Returns (milliamps, sign_was_assumed).
 
@@ -102,6 +171,10 @@ def parse_amplitude(text: str) -> tuple[float | None, bool]:
     what separates those from a real amplitude token.
     """
     text = text.strip()
+    # A protocol-style name is handled by parse_protocol_name; the legacy rules
+    # would misread its "0.001" prefix as 0 mA.
+    if parse_protocol_name(text) is not None:
+        return None, False
     if not _HAS_MILLIAMPS.search(text):
         return None, False
 
@@ -157,20 +230,39 @@ def parse_wiring(folder_name: str) -> Wiring:
     )
 
 
-def parse_run(run_folder: Path, wiring: Wiring, parent_name: str | None = None) -> RunCondition:
+def parse_run(
+    run_folder: Path,
+    wiring: Wiring,
+    parent_name: str | None = None,
+    protocol: tuple[ProtocolInfo | None, str] | None = None,
+) -> RunCondition:
     """Parse one run folder into a RunCondition.
 
     ``parent_name`` is the immediate parent folder's name, used when the run
     folder itself lost the amplitude (``-0_05mA/-0_260819_173803``).
+    ``protocol`` is a precomputed ``protocol_for_run`` result; None recomputes.
     """
     raw_name = run_folder.name
     stripped = _TIMESTAMP.sub(" ", raw_name).strip()
 
-    amplitude, sign_assumed = parse_amplitude(stripped)
-    from_parent = False
-    if amplitude is None and parent_name:
-        amplitude, sign_assumed = parse_amplitude(_TIMESTAMP.sub(" ", parent_name).strip())
-        from_parent = amplitude is not None
+    info, protocol_source = protocol if protocol is not None else protocol_for_run(run_folder)
+    try:
+        has_onset = any(
+            child.name.endswith(".onset.txt") for child in run_folder.iterdir() if child.is_file()
+        )
+    except OSError:
+        has_onset = False
+    protocol_evidence = info is not None or has_onset
+
+    if info is not None:
+        amplitude, sign_assumed = info.amplitude_mA, False
+        from_parent = False
+    else:
+        amplitude, sign_assumed = parse_amplitude(stripped)
+        from_parent = False
+        if amplitude is None and parent_name:
+            amplitude, sign_assumed = parse_amplitude(_TIMESTAMP.sub(" ", parent_name).strip())
+            from_parent = amplitude is not None
 
     flags: list[str] = []
     lowered = stripped.lower()
@@ -188,23 +280,34 @@ def parse_run(run_folder: Path, wiring: Wiring, parent_name: str | None = None) 
         flags.append("amplitude_from_parent")
     if amplitude is None:
         flags.append("amplitude_unknown")
+    if info is not None:
+        flags.append("protocol_named")
     if wiring.user_marked_artifact:
         flags.append("user_marked_artifact")
     if wiring.common_ground:
         flags.append("common_ground")
     if wiring.after_isoflurane:
         flags.append("after_isoflurane")
-    if wiring.raw_name == "(session root)":
+    # Baseline classification: an explicit "baseline" name always wins; a run
+    # carrying protocol evidence (a protocol name or an onset file) is never a
+    # baseline; the legacy session-root rule covers the rest.
+    if "baseline" in lowered:
+        flags.append("baseline_recording")
+    elif wiring.raw_name == "(session root)" and not protocol_evidence:
         flags.append("baseline_recording")
 
     # A standalone integer left over after the amplitude token is a replicate
     # index: "-05 1 mA" and "-0_01mA 2" both mean "the Nth run at this level".
+    # Protocol-named runs encode no replicate; their folder prefix ("1_") is not one.
     replicate = None
-    remainder = _AMPLITUDE.sub("", stripped, count=1) if amplitude is not None else stripped
-    remainder = re.sub(r"\b(unsure|com port|interval|start at)\b.*", "", remainder, flags=re.IGNORECASE)
-    integer_match = _INTEGER.search(remainder)
-    if integer_match:
-        replicate = int(integer_match.group(1))
+    if info is None:
+        remainder = _AMPLITUDE.sub("", stripped, count=1) if amplitude is not None else stripped
+        remainder = re.sub(
+            r"\b(unsure|com port|interval|start at)\b.*", "", remainder, flags=re.IGNORECASE
+        )
+        integer_match = _INTEGER.search(remainder)
+        if integer_match:
+            replicate = int(integer_match.group(1))
 
     return RunCondition(
         run_folder=run_folder,
@@ -216,10 +319,17 @@ def parse_run(run_folder: Path, wiring: Wiring, parent_name: str | None = None) 
         replicate=replicate,
         flags=tuple(flags),
         notes=stripped,
+        expected_pulses_run=info.pulse_number if info else None,
+        pulse_width_s_run=info.pulse_width_s if info else None,
+        interval_s_run=info.interval_s if info else None,
+        protocol_source=protocol_source,
+        has_onset_file=has_onset,
     )
 
 
-def discover_runs(session_folder: Path) -> list[RunCondition]:
+def discover_runs(
+    session_folder: Path, wiring_label: str | None = None
+) -> list[RunCondition]:
     """Find every run folder below a session folder, with its condition.
 
     A run folder is any folder directly containing ``*.rhd`` files. Walking for
@@ -228,8 +338,10 @@ def discover_runs(session_folder: Path) -> list[RunCondition]:
 
     The session folder may itself be one wiring-condition folder (its name
     carries "stim"): every run below it then belongs to that wiring, including
-    the runs sitting directly inside it. Without this, those depth-1 runs were
-    misread as session-root baselines and skipped.
+    the runs sitting directly inside it. Flat sessions whose runs carry
+    protocol evidence (a protocol name or an onset file) are stim runs at the
+    root; their wiring is ``wiring_label`` when given, else the session folder
+    name -- never "(session root)".
     """
     session_folder = Path(session_folder).expanduser()
     root_wiring = (
@@ -245,15 +357,30 @@ def discover_runs(session_folder: Path) -> list[RunCondition]:
 
         relative = path.relative_to(session_folder)
         parts = relative.parts
-        if root_wiring is not None:
-            wiring = root_wiring
+        protocol = protocol_for_run(path)
+        try:
+            has_onset = any(
+                child.name.endswith(".onset.txt") for child in path.iterdir() if child.is_file()
+            )
+        except OSError:
+            has_onset = False
+        protocol_evidence = protocol[0] is not None or has_onset
+
+        if len(parts) > 1:
+            wiring = root_wiring if root_wiring is not None else parse_wiring(parts[0])
+        elif protocol_evidence:
+            # Flat-session stim run: the user's label wins, then a root that is
+            # itself a wiring folder, then the session folder's name.
+            if wiring_label:
+                wiring = Wiring(raw_name=wiring_label)
+            elif root_wiring is not None:
+                wiring = root_wiring
+            else:
+                wiring = Wiring(raw_name=session_folder.name)
         else:
-            # The configuration folder is the top-level one; runs directly under
-            # the session folder (the numbered baselines) have no configuration.
-            config_name = parts[0] if len(parts) > 1 else ""
-            wiring = parse_wiring(config_name) if config_name else Wiring(raw_name="(session root)")
+            wiring = root_wiring if root_wiring is not None else Wiring(raw_name="(session root)")
         parent_name = parts[-2] if len(parts) > 1 else None
-        runs.append(parse_run(path, wiring, parent_name))
+        runs.append(parse_run(path, wiring, parent_name, protocol=protocol))
 
     return runs
 
@@ -292,12 +419,15 @@ def contact_positions_um(
 
 
 __all__ = [
+    "ProtocolInfo",
     "RunCondition",
     "Wiring",
     "contact_index",
     "contact_positions_um",
     "discover_runs",
     "parse_amplitude",
+    "parse_protocol_name",
     "parse_run",
     "parse_wiring",
+    "protocol_for_run",
 ]

@@ -54,6 +54,14 @@ class EvokedConfig:
     wiring_include: tuple[str, ...] | None = None
     wiring_exclude: tuple[str, ...] = ()
 
+    # Oscilloscope stimulus timing (20260821-style sessions). None scope_dir
+    # auto-detects <session>/oscilloscope (and the parent's in single-run
+    # mode). wiring_label names the wiring of flat sessions whose runs sit at
+    # the session root; None falls back to the session folder name.
+    scope_dir: Path | None = None
+    wiring_label: str | None = None
+    scope_align_window_s: float = 5.0
+
     # Protocol (known, used as priors and as correctness checks).
     expected_pulses: int = 50
     pulse_width_ms: float = 5.0
@@ -130,6 +138,8 @@ def config_from_text_fields(
     max_period_s: str = "",
     wiring_include: str = "",
     wiring_exclude: str = "",
+    scope_dir: str = "",
+    wiring_label: str = "",
 ) -> EvokedConfig:
     """Build an EvokedConfig from raw widget or CLI strings.
 
@@ -212,6 +222,13 @@ def config_from_text_fields(
     include_terms = _filter_terms(wiring_include)
     exclude_terms = _filter_terms(wiring_exclude)
 
+    scope_text = _clean(scope_dir)
+    scope_path: Path | None = None
+    if scope_text:
+        scope_path = Path(scope_text).expanduser()
+        if not scope_path.is_dir():
+            raise ValueError(f"Scope folder does not exist: {scope_path}")
+
     return EvokedConfig(
         session_folder=folder,
         single_run=_clean(single_run).lower() in ("1", "true", "yes", "on", "single"),
@@ -231,6 +248,8 @@ def config_from_text_fields(
         max_period_s=_positive_float(max_period_s, "Max period (s)", 1.5),
         wiring_include=include_terms or None,
         wiring_exclude=exclude_terms,
+        scope_dir=scope_path,
+        wiring_label=_clean(wiring_label) or None,
     )
 
 

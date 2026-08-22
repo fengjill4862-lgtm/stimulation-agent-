@@ -9,7 +9,7 @@ thin display layer and the headless CLI produces identical files.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +31,7 @@ from .metrics import (
 from .naming import RunCondition, contact_positions_um, discover_runs
 from .peaks import ChannelPeaks, analyse_channel_peaks
 from .pulses import PulseTrain, recover_pulses
+from .scope_sync import scope_train_for_run
 
 ProgressCallback = Callable[[str], None]
 
@@ -77,8 +78,46 @@ class SessionResult:
         return [r for r in self.runs if not r.ok]
 
 
+def _effective_config(condition: RunCondition, config: EvokedConfig) -> EvokedConfig:
+    """Per-run protocol overrides from a protocol-named run, else the config.
+
+    The 2x period headroom covers the Keithley's serial overhead (5.55 s
+    measured against a 4.8 s label on the 20260821 session).
+    """
+    if condition.expected_pulses_run is None:
+        return config
+    width_s = condition.pulse_width_s_run or config.pulse_width_ms / 1000.0
+    interval_s = condition.interval_s_run or 0.0
+    # Wide pulses tolerate a coarser envelope, and the comb fallback's
+    # quadratic autocorrelation needs one to stay affordable on long periods.
+    envelope_ms = max(config.envelope_ms, 2.0) if width_s >= 0.05 else config.envelope_ms
+    return replace(
+        config,
+        expected_pulses=condition.expected_pulses_run,
+        pulse_width_ms=width_s * 1000.0,
+        max_period_s=max(config.max_period_s, 2.0 * (interval_s + width_s)),
+        envelope_ms=envelope_ms,
+    )
+
+
+def _resolve_scope_dir(config: EvokedConfig) -> Path | None:
+    """Explicit scope folder, else <session>/oscilloscope, else the parent's."""
+    if config.scope_dir is not None:
+        return config.scope_dir
+    candidates = [config.session_folder / "oscilloscope"]
+    if config.single_run:
+        candidates.append(config.session_folder.parent / "oscilloscope")
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 def analyse_run(
-    condition: RunCondition, config: EvokedConfig, prior_periods: tuple[float, ...] = ()
+    condition: RunCondition,
+    config: EvokedConfig,
+    prior_periods: tuple[float, ...] = (),
+    scope_dir: Path | None = None,
 ) -> RunResult:
     """Load and analyse one run folder. Never raises; failures land in `error`."""
     result = RunResult(condition=condition)
@@ -93,20 +132,30 @@ def analyse_run(
     result.duration_s = loaded.duration_s
     result.sample_rate_hz = loaded.sample_rate_hz
 
+    effective = _effective_config(condition, config)
     try:
-        train = recover_pulses(loaded, config, prior_periods)
+        train = None
+        if scope_dir is not None:
+            train, reason = scope_train_for_run(loaded, effective, scope_dir)
+        if train is None:
+            train = recover_pulses(loaded, effective, prior_periods)
+            if scope_dir is not None:
+                train = replace(
+                    train,
+                    issues=train.issues + (f"scope timing unavailable ({reason}); comb fit used",),
+                )
         result.train = train
         if train.n_pulses == 0:
             result.error = "; ".join(train.issues) or "no pulses recovered"
             return result
 
-        result.evoked = evoked_deflection(loaded, train, config)
+        result.evoked = evoked_deflection(loaded, train, effective)
         result.peaks = [
-            analyse_channel_peaks(e, loaded.sample_rate_hz, config, train.width_ms)
+            analyse_channel_peaks(e, loaded.sample_rate_hz, effective, train.width_ms)
             for e in result.evoked
         ]
-        result.bands = band_power(loaded, train, config)
-        result.post_train = post_train_change(loaded, train, config)
+        result.bands = band_power(loaded, train, effective)
+        result.post_train = post_train_change(loaded, train, effective)
         peaks_by_channel = {p.channel: p for p in result.peaks}
         result.evidence = [
             artifact_module.run_evidence(
@@ -121,7 +170,7 @@ def analyse_run(
                     if e.channel in peaks_by_channel
                     else 0
                 ),
-                pulse_width_ms=config.pulse_width_ms,
+                pulse_width_ms=effective.pulse_width_ms,
             )
             for e in result.evoked
         ]
@@ -209,6 +258,13 @@ def _rows_for(
             row["artifact_post_response_detected"] = evidence.post_response_detected
         row["contact_position_um"] = (positions or {}).get(evoked.channel, float("nan"))
         row["band_gap_minimum_hz"] = bands.gap_minimum_hz if bands else float("nan")
+        row["timing_source"] = train.source if train else ""
+        row["clock_offset_s"] = train.clock_offset_s if train else float("nan")
+        row["scope_capture"] = train.scope_capture if train else ""
+        row["scope_align_z"] = train.align_z if train else float("nan")
+        row["expected_pulses_run"] = condition.expected_pulses_run
+        row["pulse_width_s_run"] = condition.pulse_width_s_run
+        row["interval_s_run"] = condition.interval_s_run
         rows.append(row)
 
     return rows
@@ -365,7 +421,10 @@ def _session_periods(runs: list[RunResult], config: EvokedConfig) -> tuple[float
     confident = [
         r.train.period_s
         for r in runs
-        if r.ok and r.train is not None and r.train.ok and r.train.comb_z >= config.min_comb_z
+        if r.ok
+        and r.train is not None
+        and r.train.ok
+        and (r.train.comb_z >= config.min_comb_z or r.train.source == "scope")
     ]
     if not confident:
         return ()
@@ -385,7 +444,8 @@ def run_session(config: EvokedConfig, progress: ProgressCallback | None = None) 
         if progress is not None:
             progress(message)
 
-    conditions = discover_runs(config.session_folder)
+    conditions = discover_runs(config.session_folder, config.wiring_label)
+    scope_dir = _resolve_scope_dir(config)
     stim_runs = [c for c in conditions if "baseline_recording" not in c.flags]
     skipped = len(conditions) - len(stim_runs)
 
@@ -403,7 +463,7 @@ def run_session(config: EvokedConfig, progress: ProgressCallback | None = None) 
 
     for index, condition in enumerate(selected, start=1):
         report(f"[{index}/{len(selected)}] {condition.raw_name}")
-        result.runs.append(analyse_run(condition, config))
+        result.runs.append(analyse_run(condition, config, scope_dir=scope_dir))
 
     # Second pass. The Keithley interval did not change between consecutive
     # recordings, so periods established by the runs where the stimulus is
@@ -415,11 +475,16 @@ def run_session(config: EvokedConfig, progress: ProgressCallback | None = None) 
             "Session pulse periods established from confident runs: "
             + ", ".join(f"{p * 1000:.0f} ms" for p in priors)
         )
-        weak = [i for i, r in enumerate(result.runs) if not (r.ok and r.train and r.train.ok)]
+        weak = [
+            i
+            for i, r in enumerate(result.runs)
+            if not (r.ok and r.train and r.train.ok)
+            and not (r.train is not None and r.train.source == "scope")
+        ]
         for count, index in enumerate(weak, start=1):
             condition = result.runs[index].condition
             report(f"[retime {count}/{len(weak)}] {condition.raw_name}")
-            retimed = analyse_run(condition, config, priors)
+            retimed = analyse_run(condition, config, priors, scope_dir=scope_dir)
             if retimed.ok and retimed.train and retimed.train.comb_z > _comb_z(result.runs[index]):
                 result.runs[index] = retimed
 
@@ -449,7 +514,7 @@ def run_single(config: EvokedConfig, progress: ProgressCallback | None = None) -
     checked -- does the timing come back, does the waveform look like a response
     -- before committing to the full sweep.
     """
-    from .naming import parse_run, parse_wiring
+    from .naming import Wiring, parse_run, parse_wiring
 
     folder = config.session_folder
     if not any(folder.glob("*.rhd")):
@@ -462,15 +527,18 @@ def run_single(config: EvokedConfig, progress: ProgressCallback | None = None) -
         if "stim" in candidate.name.lower():
             wiring = parse_wiring(candidate.name)
             break
+    if wiring is None and config.wiring_label:
+        wiring = Wiring(raw_name=config.wiring_label)
     if wiring is None:
         wiring = parse_wiring(folder.parent.name)
 
     condition = parse_run(folder, wiring, folder.parent.name)
+    scope_dir = _resolve_scope_dir(config)
     if progress is not None:
         progress(f"analysing {condition.raw_name}")
 
     result = SessionResult(config=config)
-    run_result = analyse_run(condition, config)
+    run_result = analyse_run(condition, config, scope_dir=scope_dir)
     result.runs.append(run_result)
     positions = contact_positions_um(
         sorted(run_result.healthy_channels), config.contact_pitch_um, config.contact_order

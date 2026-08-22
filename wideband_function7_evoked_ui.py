@@ -64,7 +64,7 @@ def _session_seed(namespace: MutableMapping[str, object] | None) -> Path:
 def _timing_table(result) -> str:
     header = (
         f"{'run':38s} {'mA':>7s} {'ch':>6s} {'n':>3s} {'T ms':>7s} "
-        f"{'start s':>8s} {'w ms':>6s} {'p-p uV':>9s} {'lat ms':>7s} {'ok':>5s}"
+        f"{'start s':>8s} {'w ms':>6s} {'p-p uV':>9s} {'lat ms':>7s} {'src':>5s} {'ok':>5s}"
     )
     lines = [header, "-" * len(header)]
     for row in result.rows:
@@ -75,7 +75,8 @@ def _timing_table(result) -> str:
             f"{row['channel']:>6s} {row['n_pulses']:>3d} "
             f"{row['pulse_period_ms']:>7.1f} {row['train_start_s']:>8.2f} "
             f"{row['pulse_width_ms']:>6.1f} {row['evoked_pp_uV']:>9.1f} "
-            f"{row['peak_latency_ms']:>7.2f} {str(row['timing_ok']):>5s}"
+            f"{row['peak_latency_ms']:>7.2f} {str(row.get('timing_source', '')):>5s} "
+            f"{str(row['timing_ok']):>5s}"
         )
     return "\n".join(lines)
 
@@ -180,6 +181,20 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
         layout=widgets.Layout(width="280px"),
         style={"description_width": "85px"},
     )
+    scope_dir_text = widgets.Text(
+        value="",
+        description="Scope dir",
+        placeholder="empty = auto: <session>/oscilloscope",
+        layout=widgets.Layout(width="340px"),
+        style={"description_width": "80px"},
+    )
+    wiring_label_text = widgets.Text(
+        value="",
+        description="Wiring label",
+        placeholder="for flat sessions; empty = session folder name",
+        layout=widgets.Layout(width="360px"),
+        style={"description_width": "90px"},
+    )
 
     preview_button = generate_button("Generate Preview", width="170px")
     save_btn = save_button("Save Bundle", width="130px")
@@ -201,6 +216,7 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                 ),
                 widgets.HBox([pitch_float, order_text, resp_window_float, max_period_float]),
                 widgets.HBox([wiring_include_text, wiring_exclude_text]),
+                widgets.HBox([scope_dir_text, wiring_label_text]),
                 widgets.HTML(
                     value=(
                         "<b>Evoked response to external (Keithley) stimulation, from RHD "
@@ -264,6 +280,8 @@ def show_function7_evoked_response(namespace: MutableMapping[str, object] | None
                 max_period_s=str(max_period_float.value),
                 wiring_include=wiring_include_text.value,
                 wiring_exclude=wiring_exclude_text.value,
+                scope_dir=scope_dir_text.value,
+                wiring_label=wiring_label_text.value,
             )
         except ValueError as exc:
             status.value = error_html(str(exc))

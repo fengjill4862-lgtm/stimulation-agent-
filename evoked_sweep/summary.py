@@ -123,6 +123,21 @@ def verdict_text(result: SessionResult) -> str:
     if counts:
         exact = sum(1 for c in counts if c == config.expected_pulses)
         lines.append(f"  pulses  : {exact}/{len(counts)} runs recovered exactly {config.expected_pulses}")
+    scope_runs = [r for r in result.analysed if r.train and r.train.source == "scope"]
+    comb_runs = [r for r in result.analysed if r.train and r.train.source == "comb"]
+    if scope_runs:
+        lines.append(
+            f"  source  : {len(scope_runs)} run(s) timed from the oscilloscope, "
+            f"{len(comb_runs)} from the comb fit"
+        )
+        offsets = [
+            r.train.clock_offset_s for r in scope_runs if np.isfinite(r.train.clock_offset_s)
+        ]
+        if offsets:
+            lines.append(
+                f"  clock   : Intan-vs-host offset median {np.median(offsets):+.3f} s, "
+                f"spread {(max(offsets) - min(offsets)) * 1000.0:.0f} ms across scope-timed runs"
+            )
     lines.append("")
 
     timing_problems = [r for r in result.analysed if r.train and not r.train.ok]

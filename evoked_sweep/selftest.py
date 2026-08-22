@@ -31,6 +31,7 @@ from .naming import (
     contact_positions_um,
     discover_runs,
     parse_amplitude,
+    parse_protocol_name,
     parse_wiring,
 )
 from .peaks import analyse_channel_peaks
@@ -193,6 +194,25 @@ def test_naming() -> None:
     check(
         parse_wiring("stim 1 recording ground 3 common ground - artifact").common_ground,
         "common ground detected",
+    )
+
+    protocol_name = "0.001mA_-0.001mA_pulsewidth0.3s_interval4.5s_pulsenumber25"
+    for text in (protocol_name, protocol_name + ".rhd", protocol_name + ".onset.txt"):
+        info = parse_protocol_name(text)
+        check(
+            info is not None
+            and (info.amplitude_mA, info.second_phase_mA) == (0.001, -0.001)
+            and (info.pulse_width_s, info.interval_s, info.pulse_number) == (0.3, 4.5, 25),
+            f"protocol name parses ({text[-12:]})",
+        )
+    cathodic = parse_protocol_name("-0.02mA_0.02mA_pulsewidth0.3s_interval4.5s_pulsenumber25")
+    check(
+        cathodic is not None and cathodic.amplitude_mA == -0.02,
+        "cathodic-leading protocol keeps the leading sign",
+    )
+    check(
+        parse_amplitude(protocol_name) == (None, False),
+        "legacy parser is shielded from protocol names (no 0.0 mA misparse)",
     )
 
     check(contact_index("B-017") == 17, "contact index from trailing digits")
@@ -749,6 +769,148 @@ def test_wiring_scope_and_filter(tmp: Path) -> None:
     )
 
 
+def _write_fake_capture(
+    path: Path, pulse_epochs, *, phase_s: float = 0.2, pause_s: float = 0.1, seed: int = 9
+) -> None:
+    """A small scope capture: bursty timestamps, arbitrary probe scale."""
+    rng = np.random.default_rng(seed)
+    start = float(pulse_epochs[0]) - 20.0
+    stop = float(pulse_epochs[-1]) + 8.0
+    lines = ["timestamp time voltage1 current_mA1"]
+    t = start
+    while t < stop:
+        value = -19.5 + rng.normal(0.0, 0.2)
+        for onset in pulse_epochs:
+            offset = t - onset
+            if 0.0 <= offset < phase_s:
+                value += 20.0
+                break
+            if phase_s + pause_s <= offset < 2.0 * phase_s + pause_s:
+                value -= 20.0
+                break
+        lines.append(f"{t:.8f} {t - start:.8f} {value / 200.0:.8f} {value:.8f}")
+        # Bursty grid: ~1 ms typical, occasional 30 ms dropouts.
+        t += 0.03 if rng.random() < 0.005 else float(rng.lognormal(np.log(0.001), 0.4))
+    path.write_text("\r\n".join(lines) + "\r\n")
+
+
+def test_scope_sync(tmp: Path) -> None:
+    print("oscilloscope timing: onset file + capture + clock-offset fit")
+    from datetime import datetime
+
+    from . import scope_sync
+    from .pipeline import run_session
+
+    session = tmp / "20990821 flat session"
+    run_folder = session / "1_260821_120000"
+    truth = make_run(
+        run_folder,
+        amplitude_uV=800.0,
+        shape="biphasic",
+        period_s=5.55,
+        n_pulses=10,
+        pulse_width_ms=500.0,
+        first_onset_s=10.0,
+        duration_s=80.0,
+        seed=71,
+    )
+
+    start_epoch = datetime(2026, 8, 21, 12, 0, 0).timestamp()
+    planted_offset = 1.7  # stim-host clock ahead of the Intan folder clock
+    onset_epoch = start_epoch + float(truth[0]) + planted_offset
+    protocol = "0.05mA_-0.05mA_pulsewidth0.5s_interval5.05s_pulsenumber10"
+    (run_folder / f"{protocol}.onset.txt").write_text(
+        f"pulse_onset_epoch_s={onset_epoch:.7f}\n"
+        f"pulse_onset_local_time=2026-08-21 12:00:00.000000\n"
+    )
+
+    scope_dir = session / "oscilloscope"
+    scope_dir.mkdir(parents=True, exist_ok=True)
+    pulse_epochs = onset_epoch + (truth - truth[0])
+    capture = scope_dir / f"{int(onset_epoch - 15)}.txt"
+    _write_fake_capture(capture, pulse_epochs)
+    (scope_dir / f"{int(onset_epoch - 300)}.txt").write_text("")  # 0-byte decoy
+
+    check(scope_sync.read_onset_epoch(run_folder) == float(f"{onset_epoch:.7f}"), "onset epoch read back")
+    check(
+        scope_sync.run_start_epoch(run_folder) == start_epoch,
+        "run start epoch from the folder name",
+    )
+    span = scope_sync.capture_span(capture)
+    check(span is not None and span[0] <= onset_epoch <= span[1], "capture span brackets the onset")
+    found = scope_sync.find_scope_capture(scope_dir, onset_epoch)
+    check(found == capture, f"capture found, decoy skipped (got {found and found.name})")
+
+    pulses = scope_sync.read_scope_pulse_epochs(capture, onset_epoch, 10, 0.5, 5.05)
+    check(pulses.epochs_s.size == 10, f"10 scope pulses detected (got {pulses.epochs_s.size})")
+    if pulses.epochs_s.size == 10:
+        edge_error_ms = np.abs(pulses.epochs_s - pulse_epochs) * 1000.0
+        check(
+            float(edge_error_ms.max()) < 5.0,
+            f"scope edges within 5 ms (worst {edge_error_ms.max():.2f})",
+        )
+        check(abs(pulses.period_s - 5.55) < 0.05, f"measured period 5.55 s (got {pulses.period_s:.3f})")
+
+    # End-to-end through the session pipeline (scope dir auto-detected).
+    result = run_session(_config(session, wiring_label="test wiring"), progress=lambda m: None)
+    scoped = next((r for r in result.runs if r.condition.run_folder == run_folder), None)
+    check(scoped is not None and scoped.ok, "scope-timed run analysed")
+    if scoped is not None and scoped.train is not None:
+        train = scoped.train
+        check(train.source == "scope", f"timing source is scope (got {train.source})")
+        check(train.n_pulses == 10, f"per-run pulsenumber overrides config (got {train.n_pulses})")
+        if train.n_pulses == 10:
+            onset_error_ms = np.abs(train.onsets_s - truth) * 1000.0
+            check(
+                float(onset_error_ms.max()) < 5.0,
+                f"onsets within 5 ms of truth (worst {onset_error_ms.max():.2f})",
+            )
+        check(
+            abs(train.clock_offset_s - planted_offset) < 0.02,
+            f"planted clock offset recovered ({train.clock_offset_s:+.3f} vs +1.700)",
+        )
+        check(train.align_z >= 5.0, f"alignment confident (z={train.align_z:.1f})")
+    rows = [r for r in result.rows if r["run"] == run_folder.name]
+    check(
+        bool(rows)
+        and rows[0]["timing_source"] == "scope"
+        and rows[0]["scope_capture"] == capture.name
+        and rows[0]["wiring"] == "test wiring"
+        and rows[0]["expected_pulses_run"] == 10,
+        "rows carry the scope columns and the flat-session wiring label",
+    )
+    check(
+        bool(rows) and abs(rows[0]["amplitude_mA"] - 0.05) < 1e-9 and rows[0]["polarity"] == "anodic",
+        "protocol amplitude and polarity from the leading phase",
+    )
+
+    # Fallback: a protocol-named run without onset.txt uses the comb fit.
+    fallback_folder = session / "1_260821_130000"
+    make_run(
+        fallback_folder,
+        amplitude_uV=800.0,
+        shape="biphasic",
+        period_s=5.55,
+        n_pulses=10,
+        pulse_width_ms=500.0,
+        first_onset_s=10.0,
+        duration_s=80.0,
+        seed=72,
+    )
+    (fallback_folder / f"{fallback_folder.name}.rhd").rename(fallback_folder / f"{protocol}.rhd")
+    result = run_session(_config(session, wiring_label="test wiring"), progress=lambda m: None)
+    fallback = next((r for r in result.runs if r.condition.run_folder == fallback_folder), None)
+    check(fallback is not None and fallback.train is not None, "fallback run analysed")
+    if fallback is not None and fallback.train is not None:
+        check(fallback.train.source == "comb", f"fallback uses comb fit (got {fallback.train.source})")
+        check(
+            any("scope timing unavailable" in issue for issue in fallback.train.issues),
+            f"fallback reason recorded (issues: {fallback.train.issues})",
+        )
+    baselines = [r for r in result.runs if "baseline_recording" in r.condition.flags]
+    check(not baselines, "no protocol run misread as baseline")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="evoked_selftest_") as name:
         tmp = Path(name)
@@ -764,6 +926,7 @@ def main() -> int:
         test_gap_band_power_validity(tmp)
         test_slow_protocol(tmp)
         test_wiring_scope_and_filter(tmp)
+        test_scope_sync(tmp)
 
     print()
     if _failures:

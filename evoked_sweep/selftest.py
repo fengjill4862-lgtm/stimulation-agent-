@@ -477,6 +477,9 @@ def test_peak_windows_and_detection(tmp: Path) -> None:
             "artifact_coupling_ratio", "artifact_post_response_detected",
             "contact_position_um", "band_gap_minimum_hz",
             "decade_suspect", "decade_suspect_note",
+            "timing_source", "clock_offset_s", "scope_capture", "scope_align_z",
+            "scope_lead", "scope_phase1_s", "scope_ipd_s", "scope_phase2_s",
+            "expected_pulses_run", "pulse_width_s_run", "interval_s_run",
         )
         missing_new = [key for key in added if key not in row]
         check(not missing_new, f"new runs.csv columns present (missing: {missing_new})")
@@ -770,7 +773,8 @@ def test_wiring_scope_and_filter(tmp: Path) -> None:
 
 
 def _write_fake_capture(
-    path: Path, pulse_epochs, *, phase_s: float = 0.2, pause_s: float = 0.1, seed: int = 9
+    path: Path, pulse_epochs, *, phase_s: float = 0.2, pause_s: float = 0.1,
+    lead_sign: int = 1, seed: int = 9
 ) -> None:
     """A small scope capture: bursty timestamps, arbitrary probe scale."""
     rng = np.random.default_rng(seed)
@@ -778,15 +782,26 @@ def _write_fake_capture(
     stop = float(pulse_epochs[-1]) + 8.0
     lines = ["timestamp time voltage1 current_mA1"]
     t = start
+    envelope_s = 2.0 * phase_s + pause_s
     while t < stop:
         value = -19.5 + rng.normal(0.0, 0.2)
         for onset in pulse_epochs:
             offset = t - onset
+            # Piecewise-linear RC-ish electrode voltage: ramp up under the
+            # first current phase, sag slightly in the pause, ramp down
+            # through the second phase, then a decaying discharge tail.
             if 0.0 <= offset < phase_s:
-                value += 20.0
+                value += 20.0 * lead_sign * (offset / phase_s)
                 break
-            if phase_s + pause_s <= offset < 2.0 * phase_s + pause_s:
-                value -= 20.0
+            if phase_s <= offset < phase_s + pause_s:
+                value += lead_sign * (20.0 - 2.0 * (offset - phase_s) / pause_s)
+                break
+            if phase_s + pause_s <= offset < envelope_s:
+                progress = (offset - phase_s - pause_s) / phase_s
+                value += lead_sign * (18.0 - 38.0 * progress)
+                break
+            if envelope_s <= offset < envelope_s + 0.6:
+                value += -20.0 * lead_sign * (1.0 - (offset - envelope_s) / 0.6)
                 break
         lines.append(f"{t:.8f} {t - start:.8f} {value / 200.0:.8f} {value:.8f}")
         # Bursty grid: ~1 ms typical, occasional 30 ms dropouts.
@@ -828,7 +843,7 @@ def test_scope_sync(tmp: Path) -> None:
     scope_dir.mkdir(parents=True, exist_ok=True)
     pulse_epochs = onset_epoch + (truth - truth[0])
     capture = scope_dir / f"{int(onset_epoch - 15)}.txt"
-    _write_fake_capture(capture, pulse_epochs)
+    _write_fake_capture(capture, pulse_epochs, lead_sign=-1)
     (scope_dir / f"{int(onset_epoch - 300)}.txt").write_text("")  # 0-byte decoy
 
     check(scope_sync.read_onset_epoch(run_folder) == float(f"{onset_epoch:.7f}"), "onset epoch read back")
@@ -850,6 +865,14 @@ def test_scope_sync(tmp: Path) -> None:
             f"scope edges within 5 ms (worst {edge_error_ms.max():.2f})",
         )
         check(abs(pulses.period_s - 5.55) < 0.05, f"measured period 5.55 s (got {pulses.period_s:.3f})")
+        check(pulses.lead_sign == -1, f"leading phase sign from the slope (got {pulses.lead_sign})")
+        check(
+            abs(pulses.phase1_s - 0.2) < 0.05
+            and abs(pulses.ipd_s - 0.1) < 0.06
+            and abs(pulses.phase2_s - 0.2) < 0.06,
+            f"phase segmentation ~0.2/0.1/0.2 s (got {pulses.phase1_s:.2f}/{pulses.ipd_s:.2f}/{pulses.phase2_s:.2f})",
+        )
+        check(abs(pulses.envelope_s - 0.5) < 0.08, f"envelope ~0.5 s (got {pulses.envelope_s:.2f})")
 
     # End-to-end through the session pipeline (scope dir auto-detected).
     result = run_session(_config(session, wiring_label="test wiring"), progress=lambda m: None)
@@ -880,8 +903,15 @@ def test_scope_sync(tmp: Path) -> None:
         "rows carry the scope columns and the flat-session wiring label",
     )
     check(
-        bool(rows) and abs(rows[0]["amplitude_mA"] - 0.05) < 1e-9 and rows[0]["polarity"] == "anodic",
-        "protocol amplitude and polarity from the leading phase",
+        bool(rows) and abs(rows[0]["amplitude_mA"] + 0.05) < 1e-9 and rows[0]["polarity"] == "cathodic",
+        "polarity corrected from the scope against the anodic-first label",
+    )
+    check(
+        bool(rows)
+        and "polarity_from_scope" in rows[0]["flags"]
+        and rows[0]["scope_lead"] == "cathodic"
+        and abs(rows[0]["scope_phase1_s"] - 0.2) < 0.05,
+        "rows carry the scope waveform columns and the correction flag",
     )
 
     # Fallback: a protocol-named run without onset.txt uses the comb fit.

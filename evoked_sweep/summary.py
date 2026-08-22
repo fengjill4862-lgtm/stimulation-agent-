@@ -138,6 +138,24 @@ def verdict_text(result: SessionResult) -> str:
                 f"  clock   : Intan-vs-host offset median {np.median(offsets):+.3f} s, "
                 f"spread {(max(offsets) - min(offsets)) * 1000.0:.0f} ms across scope-timed runs"
             )
+        phase1 = [r.train.phase1_s for r in scope_runs if np.isfinite(r.train.phase1_s)]
+        ipd = [r.train.ipd_s for r in scope_runs if np.isfinite(r.train.ipd_s)]
+        phase2 = [r.train.phase2_s for r in scope_runs if np.isfinite(r.train.phase2_s)]
+        if phase1 and ipd and phase2:
+            lines.append(
+                f"  shape   : phase {np.median(phase1):.2f} s + ipd {np.median(ipd):.2f} s "
+                f"+ phase {np.median(phase2):.2f} s, measured from the scope voltage slope"
+            )
+        flipped = sorted(
+            r.condition.raw_name
+            for r in scope_runs
+            if "polarity_from_scope" in r.condition.flags
+        )
+        if flipped:
+            lines.append(
+                f"  polarity: {len(flipped)} run(s) corrected from the scope's leading phase "
+                f"(the control script always writes the anodic-first name): " + ", ".join(flipped)
+            )
     lines.append("")
 
     timing_problems = [r for r in result.analysed if r.train and not r.train.ok]

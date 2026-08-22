@@ -57,6 +57,16 @@ class ScopePulses:
     period_s: float
     capture: Path
     issues: tuple[str, ...]
+    # Waveform shape from slope segmentation (medians across pulses). The
+    # scope trace is the voltage across the electrode: a current square
+    # becomes a voltage ramp, so the phases live in the DERIVATIVE -- steady
+    # positive slope = positive phase, decay = interphase, steady negative
+    # slope = negative phase. lead_sign +1 = anodic-leading.
+    lead_sign: int = 0
+    phase1_s: float = float("nan")
+    ipd_s: float = float("nan")
+    phase2_s: float = float("nan")
+    envelope_s: float = float("nan")  # onset to the second phase's extremum
 
 
 def read_onset_epoch(run_folder: Path) -> float | None:
@@ -159,6 +169,73 @@ def _seek_to_epoch(handle, size: int, target: float) -> None:
         handle.readline()
 
 
+def _segment_pulses(
+    time_array: np.ndarray, values: np.ndarray, edges: list[float], pulse_width_s: float
+) -> tuple[int, float, float, float, float]:
+    """Median (lead_sign, phase1, ipd, phase2, envelope) across pulses.
+
+    Works on the electrode-voltage trace: resample to a uniform 5 ms grid,
+    smooth, and read phase boundaries from the voltage extrema and the last
+    opposite-slope span. Returns lead_sign 0 and NaNs when indeterminate.
+    """
+    if time_array.size < 20 or not edges:
+        return 0, float("nan"), float("nan"), float("nan"), float("nan")
+    grid = np.arange(time_array[0], time_array[-1], 0.005)
+    if grid.size < 20:
+        return 0, float("nan"), float("nan"), float("nan"), float("nan")
+    u_full = np.convolve(np.interp(grid, time_array, values), np.ones(9) / 9, mode="same")
+    slope_full = np.gradient(u_full, grid)
+
+    leads: list[int] = []
+    phase1s: list[float] = []
+    ipds: list[float] = []
+    phase2s: list[float] = []
+    envelopes: list[float] = []
+    span_s = max(1.5, 6.0 * pulse_width_s)
+    for edge in edges:
+        window = (grid >= edge - 0.3) & (grid <= edge + span_s)
+        if not window.any():
+            continue
+        g = grid[window]
+        pre = window & (grid < edge)
+        baseline = float(np.median(u_full[pre])) if pre.any() else float(u_full[window][0])
+        u = u_full[window] - baseline
+        s = slope_full[window]
+
+        t_max = float(g[np.argmax(u)])
+        t_min = float(g[np.argmin(u)])
+        lead = 1 if t_max < t_min else -1
+        t_first = min(t_max, t_min)
+        t_second = max(t_max, t_min)
+        if t_first <= edge - 0.05:
+            continue
+
+        # Second phase = the last span of opposite-sign slope ending near the
+        # second extremum.
+        opposite = -lead * s
+        threshold = 0.35 * float(np.percentile(np.abs(s), 99))
+        active = np.flatnonzero((opposite > threshold) & (g > t_first) & (g <= t_second + 0.05))
+        phase2_start = float(g[active[0]]) if active.size else float("nan")
+
+        leads.append(lead)
+        phase1s.append(t_first - edge)
+        envelopes.append(t_second - edge)
+        if np.isfinite(phase2_start):
+            ipds.append(phase2_start - t_first)
+            phase2s.append(t_second - phase2_start)
+
+    if not leads:
+        return 0, float("nan"), float("nan"), float("nan"), float("nan")
+    lead_sign = 1 if sum(leads) > 0 else -1 if sum(leads) < 0 else 0
+    return (
+        lead_sign,
+        float(np.median(phase1s)) if phase1s else float("nan"),
+        float(np.median(ipds)) if ipds else float("nan"),
+        float(np.median(phase2s)) if phase2s else float("nan"),
+        float(np.median(envelopes)) if envelopes else float("nan"),
+    )
+
+
 def read_scope_pulse_epochs(
     path: Path,
     onset_epoch: float,
@@ -215,16 +292,28 @@ def read_scope_pulse_epochs(
     starts = np.r_[0, breaks + 1]
     stops = np.r_[breaks, active_times.size - 1]
 
+    # The electrode voltage RAMPS under a current step, so the half-max
+    # crossing sits well inside the pulse. Walk each event's start backwards
+    # while the deviation stays above a low floor to reach the ramp's base.
+    low_floor = max(3.0 * mad_sd, 0.05 * float(np.percentile(deviation, 99.5)))
     edges: list[float] = []
     widths: list[float] = []
     for lo, hi in zip(starts, stops):
         if hi - lo + 1 < 3:
             continue
-        width = active_times[hi] - active_times[lo]
+        raw = int(active[lo])
+        while (
+            raw > 0
+            and deviation[raw - 1] > low_floor
+            and time_array[raw] - time_array[raw - 1] < merge_gap_s
+        ):
+            raw -= 1
+        edge = float(time_array[raw])
+        width = float(active_times[hi]) - edge
         if width < pulse_width_s / 10.0:
             continue
-        edges.append(float(active_times[lo]))
-        widths.append(float(width))
+        edges.append(edge)
+        widths.append(width)
 
     issues: list[str] = []
     if len(edges) != expected_pulses:
@@ -236,8 +325,20 @@ def read_scope_pulse_epochs(
             f"measured period {period:.2f} s vs labelled {labelled_period:.2f} s "
             "(Keithley overhead; measured timing wins)"
         )
+    lead_sign, phase1_s, ipd_s, phase2_s, envelope_s = _segment_pulses(
+        time_array, np.asarray(values), edges, pulse_width_s
+    )
     return ScopePulses(
-        np.asarray(edges), np.asarray(widths), period, path, tuple(issues)
+        np.asarray(edges),
+        np.asarray(widths),
+        period,
+        path,
+        tuple(issues),
+        lead_sign=lead_sign,
+        phase1_s=phase1_s,
+        ipd_s=ipd_s,
+        phase2_s=phase2_s,
+        envelope_s=envelope_s,
     )
 
 
@@ -318,11 +419,17 @@ def scope_train_for_run(
     if onsets.size == 0:
         return None, "every scope pulse falls outside the recording"
 
-    width_ms = float(np.median(pulses.widths_s) * 1000.0)
+    # The pulse envelope (onset to the second phase's extremum) is the honest
+    # "width" for a biphasic pulse; the half-max estimate stands in when the
+    # slope segmentation is indeterminate.
+    if np.isfinite(pulses.envelope_s):
+        width_ms = float(pulses.envelope_s * 1000.0)
+    else:
+        width_ms = float(np.median(pulses.widths_s) * 1000.0)
     if np.isfinite(width_ms) and not (
         0.2 * width_s * 1000.0 <= width_ms <= 6.0 * width_s * 1000.0
     ):
-        issues.append(f"scope width {width_ms:.0f} ms, label says {width_s * 1000:.0f} ms")
+        issues.append(f"scope envelope {width_ms:.0f} ms, label says {width_s * 1000:.0f} ms")
     if onsets.size != expected:
         issues.append(f"{onsets.size} pulses inside the recording, expected {expected}")
 
@@ -348,6 +455,10 @@ def scope_train_for_run(
         clock_offset_s=-delta,
         scope_capture=capture.name,
         align_z=align_z,
+        lead_sign=pulses.lead_sign,
+        phase1_s=pulses.phase1_s,
+        ipd_s=pulses.ipd_s,
+        phase2_s=pulses.phase2_s,
     )
     return train, ""
 

@@ -45,6 +45,12 @@ class PulseTrain:
     clock_offset_s: float = float("nan")  # stim-host clock minus Intan folder clock
     scope_capture: str = ""
     align_z: float = float("nan")  # scope-template alignment confidence
+    # Waveform shape measured from the scope trace (scope-timed runs only).
+    # lead_sign +1 = anodic-leading, -1 = cathodic-leading, 0 = unknown.
+    lead_sign: int = 0
+    phase1_s: float = float("nan")
+    ipd_s: float = float("nan")
+    phase2_s: float = float("nan")
 
     @property
     def n_pulses(self) -> int:

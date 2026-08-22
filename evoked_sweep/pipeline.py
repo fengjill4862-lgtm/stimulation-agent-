@@ -149,6 +149,27 @@ def analyse_run(
             result.error = "; ".join(train.issues) or "no pulses recovered"
             return result
 
+        if train.source == "scope":
+            # The scope-measured envelope is ground truth, so it -- not the
+            # labelled width -- sets the during/post boundary for everything
+            # downstream (window split, peak search, coupling evidence).
+            if np.isfinite(train.width_ms) and train.width_ms > 0:
+                effective = replace(effective, pulse_width_ms=train.width_ms)
+            # Polarity comes from the scope's leading-phase sign: the control
+            # script always writes the anodic-first name, so a cathodic run's
+            # label lies. The magnitude stays the label's; only the sign moves.
+            if (
+                train.lead_sign != 0
+                and condition.amplitude_mA is not None
+                and np.sign(condition.amplitude_mA) != train.lead_sign
+            ):
+                condition = replace(
+                    condition,
+                    amplitude_mA=train.lead_sign * abs(condition.amplitude_mA),
+                    flags=condition.flags + ("polarity_from_scope",),
+                )
+                result.condition = condition
+
         result.evoked = evoked_deflection(loaded, train, effective)
         result.peaks = [
             analyse_channel_peaks(e, loaded.sample_rate_hz, effective, train.width_ms)
@@ -262,6 +283,12 @@ def _rows_for(
         row["clock_offset_s"] = train.clock_offset_s if train else float("nan")
         row["scope_capture"] = train.scope_capture if train else ""
         row["scope_align_z"] = train.align_z if train else float("nan")
+        row["scope_lead"] = (
+            {1: "anodic", -1: "cathodic"}.get(train.lead_sign, "") if train else ""
+        )
+        row["scope_phase1_s"] = train.phase1_s if train else float("nan")
+        row["scope_ipd_s"] = train.ipd_s if train else float("nan")
+        row["scope_phase2_s"] = train.phase2_s if train else float("nan")
         row["expected_pulses_run"] = condition.expected_pulses_run
         row["pulse_width_s_run"] = condition.pulse_width_s_run
         row["interval_s_run"] = condition.interval_s_run

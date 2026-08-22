@@ -278,21 +278,32 @@ def scope_train_for_run(
         return None, "no usable channel for alignment"
     z = np.max(np.vstack(z_stack), axis=0)
 
-    lag_bins = max(1, int(round(_EDGE_CONTRAST_S / bin_s)))
+    # Window-averaged contrast across each putative edge: mean envelope z in
+    # [+20, +180] ms minus [-180, -20] ms around the onset, via prefix sums so
+    # every candidate offset costs O(1). Single-bin samples are far too noisy.
+    inner = max(1, int(round(0.2 * _EDGE_CONTRAST_S / bin_s)))
+    outer = max(inner + 1, int(round(1.8 * _EDGE_CONTRAST_S / bin_s)))
+    window_bins = outer - inner
+    prefix = np.concatenate([[0.0], np.cumsum(z)])
+
     deltas = np.arange(-config.scope_align_window_s, config.scope_align_window_s + bin_s, bin_s)
     onset_bins = np.round((naive[None, :] + deltas[:, None]) / bin_s).astype(int)
-    after = np.clip(onset_bins + lag_bins, 0, z.size - 1)
-    before = np.clip(onset_bins - lag_bins, 0, z.size - 1)
-    valid = (onset_bins >= lag_bins) & (onset_bins < z.size - lag_bins)
-    contrast = np.where(valid, z[after] - z[before], 0.0)
+    valid = (onset_bins >= outer) & (onset_bins + outer < z.size)
+    safe = np.clip(onset_bins, outer, max(outer, z.size - outer - 1))
+    after_mean = (prefix[safe + outer] - prefix[safe + inner]) / window_bins
+    before_mean = (prefix[safe - inner] - prefix[safe - outer]) / window_bins
+    contrast = np.where(valid, after_mean - before_mean, 0.0)
     counts = np.maximum(valid.sum(axis=1), 1)
     scores = contrast.sum(axis=1) / counts
 
-    spread = float(np.std(scores))
-    if not np.isfinite(spread) or spread <= 0:
-        return None, "alignment inconclusive (flat score)"
     best_index = int(np.argmax(scores))
-    align_z = float((scores[best_index] - np.mean(scores)) / spread)
+    # Confidence against the curve OUTSIDE the peak's own neighbourhood, so a
+    # sharp genuine peak is not penalised for raising the curve's variance.
+    neighbourhood = np.abs(deltas - deltas[best_index]) <= max(0.5, width_s)
+    rest = scores[~neighbourhood]
+    if rest.size < 10 or not np.isfinite(rest.std()) or rest.std() <= 0:
+        return None, "alignment inconclusive (flat score)"
+    align_z = float((scores[best_index] - rest.mean()) / rest.std())
     if align_z < config.min_comb_z:
         return None, f"alignment inconclusive (z={align_z:.1f})"
     delta = float(deltas[best_index])

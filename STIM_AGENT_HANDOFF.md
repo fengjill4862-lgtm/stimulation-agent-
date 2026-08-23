@@ -480,6 +480,18 @@ button saves both one PNG and one CSV into the selected data folder. Filename
 prefixes are `power_prepost_...` from the UI, `power_event_...` from the batch
 runner's event mode. Nothing is written during preview generation.
 
+## Function 7: Evoked-Response Sweep
+
+The complete, current methodology -- three timing sources (oscilloscope sync,
+comb recovery, per-run protocol overrides), the during/post window split,
+Gaussian-smoothed per-peak analysis, dual band-power estimators with the
+3-cycles gap rule, coupling and decade-mislabel evidence, the full runs.csv /
+peaks.csv / figure glossary, and session-specific interpretation notes for
+20260819 and 20260821 -- is maintained in **`EVOKED_ANALYSIS_METHODS.md`**.
+Read that file before extending `evoked_sweep/`; it is the authoritative
+reference and is kept in lockstep with the 125-check
+`python3 -m evoked_sweep.selftest`.
+
 ## Function 6: Session Stimulation Analysis (Spec v2)
 
 Active UI implementation: `wideband_function6_session_ui.py`. Numerics:

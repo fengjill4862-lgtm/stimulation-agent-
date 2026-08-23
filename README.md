@@ -31,6 +31,11 @@ spike-sorting workflow.)
 | 3 | Stim-triggered event grid (quick look; epoch -> blank -> filter) | `wideband_function3_ui.py` | `plot_rhs_stim_triggered_events.py` |
 | 5 | Pre/post neuromodulation band power (event-locked: Function 6 or the batch runner) | `wideband_function5_power_ui.py` | `plot_rhs_power_analysis.py` |
 | 6 | Session-level stimulation analysis (Spec v2) | `wideband_function6_session_ui.py` | `stim_analysis/` + `run_stim_analysis.py` |
+| 7 | Evoked-response sweep (RHD, external stimulator; scope-synced timing) | `wideband_function7_evoked_ui.py` | `evoked_sweep/` + `run_evoked_sweep.py` |
+
+Function 7's full methodology (timing sources, window split, peak analysis,
+band power, artifact evidence, output glossary) is documented exhaustively in
+`EVOKED_ANALYSIS_METHODS.md`.
 
 Functions 1 and 4 were folded into Function 2 on 2026-08-20: Raw mode is the
 old Function 1, Filtered + "Ignore stim" is the old Function 4.

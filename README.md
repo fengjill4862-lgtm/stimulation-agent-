@@ -21,6 +21,12 @@ spike-sorting workflow.)
 - Layering: notebook -> `wideband_main_ui.py` (ordered reload only) ->
   `wideband_functionN_ui.py` (widgets only) -> `plot_rhs_*` / `rhs_*` /
   `stim_analysis/` (parsing, numerics, output paths).
+- These agreements are enforced by Claude Code hooks
+  (`scripts/hooks/claude_hooks.py`, registered in `.claude/settings.json`):
+  writing into a data folder or running an entry point on real recordings
+  asks first, bare `python3` is refused, and every edited `.py` / `.ipynb` is
+  run through `py_compile`, the reload-chain check and a JSON check. See
+  "Claude Code hooks" below.
 
 ## Functions
 
@@ -187,3 +193,32 @@ by recovery = 2.9 x tau + 82 ms (R2 0.98), so the DSP cutoff sets the linear
 part of the recovery and is the knob that shortens it (k=12 ~500 ms -> k=5
 44 ms in PBS at 100 uA); recording contacts do not rail below 3 kHz upper
 bandwidth; broadband noise is 3.4-4.5 uV at every setting.
+
+## Claude Code hooks
+
+`scripts/hooks/claude_hooks.py` turns the working agreements above into guard
+rails. It is one file with four subcommands, each reading the hook event as
+JSON on stdin and printing a decision (nothing at all when there is nothing to
+say). Registered in `.claude/settings.json` for sessions started in this repo,
+and in `~/Claude/.claude/settings.json` for sessions started at the workspace
+root.
+
+| Subcommand | Event | What it does |
+| --- | --- | --- |
+| `write-guard` | PreToolUse `Write\|Edit\|NotebookEdit` | **asks** before editing anything under the Synology data roots |
+| `bash-guard` | PreToolUse `Bash` | **denies** bare/anaconda `python`; **asks** before an entry point runs on real data without `--dry-run`, and before a shell command modifies a data folder |
+| `post-checks` | PostToolUse `Write\|Edit\|NotebookEdit` | `py_compile` + the reload-chain check on `.py`, a JSON check on `.ipynb`; blocks with the error when one fails |
+| `session-check` | SessionStart | warns when the worktree links are broken or the auto-backup launchd job points somewhere else (both broke at the 2026-08-24 folder rename) |
+
+Every blocking decision is `ask`, never a hard refusal -- the point is that JF
+stays the one who says yes. Reads (`ls`, `cat`, `grep`, `find`) are never
+touched, `--dry-run` runs pass silently, and the self-tests pass silently.
+
+Test a subcommand by piping it an event:
+
+```bash
+printf '%s' '{"tool_input":{"command":"python3 x.py"}}' \
+  | /usr/local/bin/python3 scripts/hooks/claude_hooks.py bash-guard
+```
+
+Review or disable them from `/hooks` inside Claude Code.

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/python3 \"${CLAUDE_PROJECT_DIR:-/Users/jf/Claude/Stimulation agent}/scripts/hooks/claude_hooks.py\" write-guard",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/python3 \"${CLAUDE_PROJECT_DIR:-/Users/jf/Claude/Stimulation agent}/scripts/hooks/claude_hooks.py\" bash-guard",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/python3 \"${CLAUDE_PROJECT_DIR:-/Users/jf/Claude/Stimulation agent}/scripts/hooks/claude_hooks.py\" post-checks",
+            "timeout": 60,
+            "statusMessage": "Checking syntax and reload order"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/python3 \"${CLAUDE_PROJECT_DIR:-/Users/jf/Claude/Stimulation agent}/scripts/hooks/claude_hooks.py\" session-check",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

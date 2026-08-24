@@ -2,7 +2,7 @@
 
 Authoritative description of the `evoked_sweep/` analysis as of 2026-08-22.
 Audience: the stimulation agent and any future session extending Function 7.
-Code lives in `/Users/jf/Claude/Matlab code/evoked_sweep/`; UI in
+Code lives in `/Users/jf/Claude/Stimulation agent/evoked_sweep/`; UI in
 `wideband_function7_evoked_ui.py`; CLI in `run_evoked_sweep.py`. Every claim
 below is enforced by `python3 -m evoked_sweep.selftest` (125 synthetic checks).
 
@@ -252,7 +252,7 @@ table's `src` column shows scope/comb per run.
 
 ## 12. Verification
 
-`cd "/Users/jf/Claude/Matlab code" && /usr/local/bin/python3 -m evoked_sweep.selftest`
+`cd "/Users/jf/Claude/Stimulation agent" && /usr/local/bin/python3 -m evoked_sweep.selftest`
 (125 checks: naming/protocol/geometry, comb recovery incl. slow biphasic,
 window split, peaks, band power incl. gap validity, decade detector, wiring
 scope/filter, full scope-sync round trip with planted clock offset and

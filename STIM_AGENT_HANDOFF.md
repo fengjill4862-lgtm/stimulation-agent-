@@ -1,7 +1,7 @@
 # Stimulation Analysis Agent Handoff
 
 Last reviewed: 2026-08-18  
-Workspace: `/Users/jf/Claude/Matlab code`  
+Workspace: `/Users/jf/Claude/Stimulation agent`  
 Git snapshot at handoff: branch `worktree-fn3-blank-space` (Function 6 /
 `stim_analysis` package added 2026-08-18; the same files are applied to `main`)  
 Worktree status before creating this handoff: clean
@@ -27,7 +27,7 @@ not replace it with this file.
 
 Main notebook:
 
-`/Users/jf/Claude/Matlab code/Plot_All_Channel_Data_Wideband.ipynb`
+`/Users/jf/Claude/Stimulation agent/Plot_All_Channel_Data_Wideband.ipynb`
 
 Open it in VS Code as a Jupyter notebook, select the Python 3 kernel, and run the
 launcher cell below the desired Markdown section. The launcher source is hidden
@@ -163,7 +163,7 @@ needs internet and only applies to webviews created after the setting.
 JupyterLab 4.6.3 is installed in the 3.12 environment and needs no workaround:
 
 ```bash
-cd "/Users/jf/Claude/Matlab code"
+cd "/Users/jf/Claude/Stimulation agent"
 /usr/local/bin/python3 -m jupyterlab
 ```
 
@@ -874,5 +874,5 @@ notebook; a Function 7 wrapper would be a thin call to
 A useful opening prompt in the new account is:
 
 ```text
-Read /Users/jf/Claude/Matlab code/STIM_AGENT_HANDOFF.md and continue the Intan RHS stimulation-analysis workflow from that exact state. Inspect git status and the active helper files before editing.
+Read /Users/jf/Claude/Stimulation agent/STIM_AGENT_HANDOFF.md and continue the Intan RHS stimulation-analysis workflow from that exact state. Inspect git status and the active helper files before editing.
 ```
